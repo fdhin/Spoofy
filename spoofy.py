@@ -2,111 +2,174 @@
 
 # spoofy.py
 import argparse
-import threading
-from queue import Queue
+import asyncio
+import logging
 from modules.dns import DNS
 from modules.spf import SPF
 from modules.dmarc import DMARC
 from modules.dkim import DKIM
 from modules.bimi import BIMI
+from modules.mx import MX
+from modules.mta_sts import MTASTS
 from modules.spoofing import Spoofing
+from modules.scoring import SecurityScore
+from modules.remediation import RemediationEngine
 from modules import report
+from modules.html_report import generate_html_report
 
-print_lock = threading.Lock()
 
+async def process_domain(domain, enable_dkim=False, enable_remediation=True,
+                          check_starttls=True):
+    """Process a domain to gather DNS, SPF, DMARC, BIMI, MX, and MTA-STS records.
 
-def process_domain(domain, enable_dkim=False):
-    """Process a domain to gather DNS, SPF, DMARC, and BIMI records. Optionally enumerate DKIM selectors if enabled."""
-    dns_info = DNS(domain)
-    spf = SPF(domain, dns_info.dns_server)
-    dmarc = DMARC(domain, dns_info.dns_server)
-    bimi_info = BIMI(domain, dns_info.dns_server)
+    Runs DNS-heavy operations in a thread pool to avoid blocking the event loop.
+    """
+    loop = asyncio.get_event_loop()
 
-    spf_record = spf.spf_record
-    spf_all = spf.all_mechanism
-    spf_dns_query_count = spf.spf_dns_query_count
-    spf_too_many_dns_queries = spf.too_many_dns_queries
+    # Run core DNS lookups concurrently in thread pool
+    dns_info = await loop.run_in_executor(None, DNS, domain)
+    server = dns_info.dns_server
 
-    dmarc_record = dmarc.dmarc_record
-    dmarc_p = dmarc.policy
-    dmarc_pct = dmarc.pct
-    dmarc_aspf = dmarc.aspf
-    dmarc_sp = dmarc.sp
-    dmarc_fo = dmarc.fo
-    dmarc_rua = dmarc.rua
+    # Run SPF, DMARC, BIMI, MX, MTA-STS lookups concurrently
+    spf_future = loop.run_in_executor(None, SPF, domain, server)
+    dmarc_future = loop.run_in_executor(None, DMARC, domain, server)
+    bimi_future = loop.run_in_executor(None, BIMI, domain, server)
+    mx_future = loop.run_in_executor(None, lambda: MX(domain, server, check_starttls=check_starttls))
+    mta_sts_future = loop.run_in_executor(None, MTASTS, domain, server)
 
-    dkim_record = None
+    spf, dmarc, bimi_info, mx_info, mta_sts = await asyncio.gather(
+        spf_future, dmarc_future, bimi_future, mx_future, mta_sts_future
+    )
+
+    # DKIM can be slow (API + DNS brute-force), run if enabled
+    dkim_data = {}
     if enable_dkim:
-        dkim = DKIM(domain, dns_info.dns_server)
-        dkim_record = dkim.dkim_record
+        dkim = await loop.run_in_executor(None, DKIM, domain, server)
+        dkim_data = dkim.to_dict()
+    else:
+        dkim_data = {"DKIM": None, "DKIM_SELECTORS": [], "DKIM_SELECTOR_COUNT": 0, "DKIM_HAS_WEAK_KEYS": False}
 
-    bimi_record = bimi_info.bimi_record
-    bimi_version = bimi_info.version
-    bimi_location = bimi_info.location
-    bimi_authority = bimi_info.authority
+    # Validate MX hosts against MTA-STS policy
+    mta_sts_mx_mismatch = mta_sts.validate_mx_against_policy(mx_info.get_mx_hosts())
 
     spoofing_info = Spoofing(
         domain,
-        dmarc_record,
-        dmarc_p,
-        dmarc_aspf,
-        spf_record,
-        spf_all,
-        spf_dns_query_count,
-        dmarc_sp,
-        dmarc_pct,
+        dmarc.dmarc_record,
+        dmarc.policy,
+        dmarc.aspf,
+        spf.spf_record,
+        spf.all_mechanism,
+        spf.spf_dns_query_count,
+        dmarc.sp,
+        dmarc.pct,
     )
-
-    domain_type = spoofing_info.domain_type
-    spoofing_possible = spoofing_info.spoofing_possible
-    spoofing_type = spoofing_info.spoofing_type
 
     result = {
         "DOMAIN": domain,
-        "DOMAIN_TYPE": domain_type,
+        "DOMAIN_TYPE": spoofing_info.domain_type,
         "DNS_SERVER": dns_info.dns_server,
-        "SPF": spf_record,
-        "SPF_MULTIPLE_ALLS": spf_all,
-        "SPF_NUM_DNS_QUERIES": spf_dns_query_count,
-        "SPF_TOO_MANY_DNS_QUERIES": spf_too_many_dns_queries,
-        "DMARC": dmarc_record,
-        "DMARC_POLICY": dmarc_p,
-        "DMARC_PCT": dmarc_pct,
-        "DMARC_ASPF": dmarc_aspf,
-        "DMARC_SP": dmarc_sp,
-        "DMARC_FORENSIC_REPORT": dmarc_fo,
-        "DMARC_AGGREGATE_REPORT": dmarc_rua,
-        "DKIM": dkim_record,
-        "BIMI_RECORD": bimi_record,
-        "BIMI_VERSION": bimi_version,
-        "BIMI_LOCATION": bimi_location,
-        "BIMI_AUTHORITY": bimi_authority,
-        "SPOOFING_POSSIBLE": spoofing_possible,
-        "SPOOFING_TYPE": spoofing_type,
+        "SPF": spf.spf_record,
+        "SPF_MULTIPLE_ALLS": spf.all_mechanism,
+        "SPF_NUM_DNS_QUERIES": spf.spf_dns_query_count,
+        "SPF_TOO_MANY_DNS_QUERIES": spf.too_many_dns_queries,
+        "DMARC": dmarc.dmarc_record,
+        "DMARC_POLICY": dmarc.policy,
+        "DMARC_PCT": dmarc.pct,
+        "DMARC_ASPF": dmarc.aspf,
+        "DMARC_SP": dmarc.sp,
+        "DMARC_FORENSIC_REPORT": dmarc.fo,
+        "DMARC_AGGREGATE_REPORT": dmarc.rua,
+        "BIMI_RECORD": bimi_info.bimi_record,
+        "BIMI_VERSION": bimi_info.version,
+        "BIMI_LOCATION": bimi_info.location,
+        "BIMI_AUTHORITY": bimi_info.authority,
+        "SPOOFING_POSSIBLE": spoofing_info.spoofing_possible,
+        "SPOOFING_TYPE": spoofing_info.spoofing_type,
     }
+
+    # Add DKIM data
+    result.update(dkim_data)
+
+    # Add MX data
+    result.update(mx_info.to_dict())
+
+    # Add MTA-STS data
+    result.update(mta_sts.to_dict())
+    result["MTA_STS_MX_MISMATCH"] = mta_sts_mx_mismatch
+
+    # Calculate security score
+    score = SecurityScore(result)
+    result.update(score.to_dict())
+
+    # Generate remediation advice
+    if enable_remediation:
+        engine = RemediationEngine(result)
+        result["RECOMMENDATIONS"] = engine.to_list()
+    else:
+        result["RECOMMENDATIONS"] = []
+
     return result
 
 
-def worker(domain_queue, print_lock, output, results, enable_dkim=False):
-    """Worker function to process domains and output results."""
-    while True:
-        domain = domain_queue.get()
-        if domain is None:
-            break
-        result = process_domain(domain, enable_dkim=enable_dkim)
-        with print_lock:
-            if output == "stdout":
-                report.printer(**result)
+async def process_domains(domains, output, enable_dkim=False,
+                           enable_remediation=True, concurrency=10,
+                           check_starttls=True):
+    """Process multiple domains with controlled concurrency using asyncio."""
+    semaphore = asyncio.Semaphore(concurrency)
+    results = []
+
+    async def process_with_semaphore(domain):
+        async with semaphore:
+            return await process_domain(
+                domain,
+                enable_dkim=enable_dkim,
+                enable_remediation=enable_remediation,
+                check_starttls=check_starttls,
+            )
+
+    if output == "stdout":
+        # For stdout, print results as they complete
+        for domain in domains:
+            result = await process_with_semaphore(domain)
+            report.printer(**result)
+    else:
+        # For file outputs, gather all results
+        tasks = [process_with_semaphore(d) for d in domains]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Filter out exceptions
+        clean_results = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                logging.error("Failed to process %s: %s", domains[i], r)
             else:
-                results.append(result)
-        domain_queue.task_done()
+                clean_results.append(r)
+        results = clean_results
+
+    return results
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Process domains to gather DNS, SPF, DMARC, and BIMI records. Use --dkim to enable DKIM selector enumeration."
+        description="SpoofyVibe — Email Security Posture Analysis. "
+        "Process domains to gather DNS, SPF, DMARC, DKIM, BIMI, MX, and MTA-STS records, "
+        "calculate security scores, and generate remediation advice."
     )
-    group = parser.add_mutually_exclusive_group(required=True)
+
+    # --- Mode selection ---
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Launch the web dashboard and REST API server",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port for the web server (default: 8080, used with --serve)",
+    )
+
+    # --- Domain selection (not required if --serve) ---
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("-d", type=str, help="Single domain to process.")
     group.add_argument(
         "-iL", type=str, help="File containing a list of domains to process."
@@ -114,51 +177,129 @@ def main():
     parser.add_argument(
         "-o",
         type=str,
-        choices=["stdout", "xls", "json"],
+        choices=["stdout", "xls", "json", "html", "csv", "md"],
         default="stdout",
-        help="Output format: stdout or xls (default: stdout).",
+        help="Output format: stdout, xls, json, html, csv, or md (default: stdout).",
     )
     parser.add_argument(
-        "-t", type=int, default=4, help="Number of threads to use (default: 4)"
+        "-c",
+        "--concurrency",
+        type=int,
+        default=10,
+        help="Maximum concurrent domain scans (default: 10)",
     )
     parser.add_argument(
-        "--dkim", action="store_true", help="Enable DKIM selector enumeration via API"
+        "--dkim", action="store_true", help="Enable DKIM selector enumeration (API + DNS brute-force)"
+    )
+    parser.add_argument(
+        "--no-remediation",
+        action="store_true",
+        help="Disable remediation advice generation",
+    )
+    parser.add_argument(
+        "--no-starttls",
+        action="store_true",
+        help="Skip STARTTLS checks on MX hosts (faster, no port 25 connections)",
+    )
+    parser.add_argument(
+        "--subdomains",
+        action="store_true",
+        help="Discover subdomains via Certificate Transparency and include them in scan",
+    )
+    parser.add_argument(
+        "--save-history",
+        action="store_true",
+        help="Save scan results to local SQLite history database",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose/debug logging output",
     )
 
     args = parser.parse_args()
+
+    # Configure logging
+    log_level = logging.DEBUG if args.verbose else logging.WARNING
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # --- Web server mode ---
+    if args.serve:
+        try:
+            import uvicorn
+            from api.app import app as web_app
+        except ImportError:
+            print("Error: FastAPI and uvicorn are required for --serve mode.")
+            print("Install with: pip install fastapi uvicorn[standard]")
+            return
+
+        print(f"\n🛡️  SpoofyVibe Web Dashboard")
+        print(f"   http://localhost:{args.port}")
+        print(f"   API docs: http://localhost:{args.port}/docs\n")
+        uvicorn.run(web_app, host="0.0.0.0", port=args.port, log_level="info")
+        return
+
+    # --- CLI scan mode (requires -d or -iL) ---
+    if not args.d and not args.iL:
+        parser.error("CLI mode requires -d or -iL (or use --serve for web mode)")
+
+    enable_remediation = not args.no_remediation
+    check_starttls = not args.no_starttls
 
     if args.d:
         domains = [args.d]
     elif args.iL:
         with open(args.iL, "r") as file:
-            domains = [line.strip() for line in file]
+            domains = [line.strip() for line in file if line.strip()]
 
-    domain_queue = Queue()
-    results = []
+    # Discover subdomains if requested
+    if args.subdomains:
+        from modules.subdomain import SubdomainFinder
+        all_domains = []
+        for domain in domains:
+            finder = SubdomainFinder(domain)
+            subs = finder.discover()
+            print(f"[*] Discovered {len(subs)} subdomains for {domain}")
+            all_domains.extend(subs)
+        domains = list(dict.fromkeys(all_domains))  # deduplicate, preserve order
 
-    for domain in domains:
-        domain_queue.put(domain)
-
-    threads = []
-    for _ in range(min(args.t, len(domains))):
-        thread = threading.Thread(
-            target=worker, args=(domain_queue, print_lock, args.o, results, args.dkim)
+    results = asyncio.run(
+        process_domains(
+            domains,
+            args.o,
+            enable_dkim=args.dkim,
+            enable_remediation=enable_remediation,
+            concurrency=args.concurrency,
+            check_starttls=check_starttls,
         )
-        thread.start()
-        threads.append(thread)
+    )
 
-    domain_queue.join()
+    # Save to history if requested
+    if args.save_history and results:
+        from modules.history import ScanHistory
+        history = ScanHistory()
+        history.save_bulk(results)
+        print(f"[*] Saved {len(results)} scan results to history")
 
     if args.o == "xls" and results:
         report.write_to_excel(results)
         print("Results written to output.xlsx")
     elif args.o == "json" and results:
         report.output_json(results)
-
-    for _ in range(len(threads)):
-        domain_queue.put(None)
-    for thread in threads:
-        thread.join()
+    elif args.o == "html" and results:
+        fname = generate_html_report(results)
+        print(f"HTML report written to {fname}")
+    elif args.o == "csv" and results:
+        report.write_to_csv(results)
+        print("Results written to output.csv")
+    elif args.o == "md" and results:
+        report.write_to_markdown(results)
+        print("Results written to output.md")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,9 @@
 
 import dns.resolver
 import re
+import logging
+
+logger = logging.getLogger("spoofyvibe.spf")
 
 
 class SPF:
@@ -25,13 +28,29 @@ class SPF:
                 domain = self.domain
             resolver = dns.resolver.Resolver()
             resolver.nameservers = [self.dns_server, "1.1.1.1", "8.8.8.8"]
+            logger.debug("Querying SPF for %s", domain)
             query_result = resolver.resolve(domain, "TXT")
             for record in query_result:
                 if "spf1" in str(record):
                     spf_record = str(record).replace('"', "")
+                    logger.debug("Found SPF for %s: %s", domain, spf_record)
                     return spf_record
+            logger.debug("No SPF record found in TXT records for %s", domain)
             return None
-        except Exception:
+        except dns.resolver.NXDOMAIN:
+            logger.debug("Domain %s does not exist (NXDOMAIN)", domain)
+            return None
+        except dns.resolver.NoAnswer:
+            logger.debug("No TXT answer for %s", domain)
+            return None
+        except dns.resolver.Timeout:
+            logger.warning("SPF query timeout for %s", domain)
+            return None
+        except dns.resolver.NoNameservers:
+            logger.warning("No nameservers available for SPF query on %s", domain)
+            return None
+        except Exception as e:
+            logger.error("Unexpected error querying SPF for %s: %s", domain, e)
             return None
 
     def get_spf_all_string(self):
@@ -51,6 +70,7 @@ class SPF:
             if redirect_match:
                 redirect_domain = redirect_match.group(1)
                 if redirect_domain in visited_domains:
+                    logger.warning("Circular SPF redirect detected for %s", self.domain)
                     break  # Prevent infinite loops in case of circular redirects
                 visited_domains.add(redirect_domain)
                 spf_record = self.get_spf_record(redirect_domain)
@@ -62,7 +82,10 @@ class SPF:
     def get_spf_dns_queries(self):
         """Returns the number of dns queries, redirects, and other mechanisms in the SPF record for a given domain."""
 
-        def count_dns_queries(spf_record):
+        def count_dns_queries(spf_record, depth=0):
+            if depth > 10:
+                logger.warning("SPF recursion depth exceeded for %s", self.domain)
+                return 0
             count = 0
             for item in spf_record.split():
                 if item.startswith("include:") or item.startswith("redirect="):
@@ -79,9 +102,11 @@ class SPF:
                             for txt_string in rdata.strings:
                                 txt_record = txt_string.decode("utf-8")
                                 if txt_record.startswith("v=spf1"):
-                                    count += count_dns_queries(txt_record)
-                    except Exception:
-                        pass
+                                    count += count_dns_queries(txt_record, depth + 1)
+                    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.Timeout):
+                        logger.debug("SPF include/redirect lookup failed for %s", url)
+                    except Exception as e:
+                        logger.debug("SPF include lookup error for %s: %s", url, e)
 
             # Count occurrences of 'a', 'mx', 'ptr', and 'exists' mechanisms
             count += len(re.findall(r"[ ,+]a[ ,:]", spf_record))

@@ -1,76 +1,262 @@
 <h1 align="center">
 <br>
-<img src=/files/Spoofy_logo.png height="375" border="2px solid #555">
+🛡️ SpoofyVibe
 <br>
-Spoofy
+<sub>Email Security Posture Analysis Platform</sub>
 </h1>
 
-[![forthebadge](https://forthebadge.com/images/badges/made-with-python.svg)](https://www.python.org/)
-[![forthebadge](https://forthebadge.com/images/badges/contains-tasty-spaghetti-code.svg)](https://www.thewholesomedish.com/spaghetti/)
-[![forthebadge](https://forthebadge.com/images/badges/it-works-why.svg)](https://www.youtube.com/watch?v=kyti25ol438)
+<p align="center">
+<a href="https://www.python.org/"><img src="https://forthebadge.com/images/badges/made-with-python.svg"></a>
+<a href="https://en.wikipedia.org/wiki/Vibe_coding"><img src="https://forthebadge.com/images/badges/powered-by-electricity.svg"></a>
+<a href="https://www.youtube.com/watch?v=kyti25ol438"><img src="https://forthebadge.com/images/badges/it-works-why.svg"></a>
+</p>
 
-## WHAT
+---
 
-`Spoofy` is a program that checks if a list of domains can be spoofed based on SPF and DMARC records. You may be asking, "Why do we need another tool that can check if a domain can be spoofed?"
+> **⚡ Fork Notice** — SpoofyVibe is a fork of [Spoofy](https://github.com/MattKeeley/Spoofy) by **Matt Keeley** and contributors. The original tool is an excellent SPF/DMARC spoofability checker with manually tested spoof logic — we owe huge credit to that foundation. SpoofyVibe extends it with scoring, remediation, MTA-STS/MX/DKIM analysis, async scanning, a web dashboard, and more. All of this was heavily **vibe coded** with AI assistance. The spaghetti has only gotten spicier. 🍝
 
-Well, Spoofy is different and here is why:
+---
 
-> 1. Authoritative lookups on all lookups with known fallback (Cloudflare DNS)
-> 2. Accurate bulk lookups
-> 3. Custom, manually tested spoof logic (No guessing or speculating, real world test results)
-> 4. SPF DNS query counter
-> 5. Optional DKIM selector enumeration via API
+## What Is SpoofyVibe?
 
-## PASSING TESTS
+SpoofyVibe is a comprehensive email security posture analysis tool. Where the original Spoofy answers "can this domain be spoofed?", SpoofyVibe answers "how secure is this domain's entire email stack, what's the score, and what should we fix?"
 
-[![Spoofy CI](https://github.com/MattKeeley/Spoofy/actions/workflows/ci.yml/badge.svg)](https://github.com/MattKeeley/Spoofy/actions/workflows/ci.yml)
+### What's New vs. Original Spoofy
 
-## HOW TO USE
+| Feature | Spoofy | SpoofyVibe |
+|---------|--------|------------|
+| SPF / DMARC analysis | ✅ | ✅ |
+| DKIM selector enumeration | API only | API + DNS brute-force (40+ selectors) + key strength analysis |
+| Spoofability detection | ✅ | ✅ (same battle-tested logic) |
+| BIMI record detection | ✅ | ✅ |
+| MTA-STS & TLS-RPT | ❌ | ✅ Full policy fetch + validation |
+| MX enumeration | ❌ | ✅ Provider ID, STARTTLS, PTR checks |
+| Security scoring | ❌ | ✅ 0-100 score, A+ to F grades, 7 categories |
+| Remediation advice | ❌ | ✅ Prioritized recommendations per domain |
+| Interactive HTML report | ❌ | ✅ Glassmorphism dark-themed report |
+| Markdown report | ❌ | ✅ |
+| Async I/O | Threads | Full `asyncio` with configurable concurrency |
+| Web dashboard | ❌ | ✅ FastAPI + SPA dashboard |
+| REST API | ❌ | ✅ 7 endpoints |
+| Scan history | ❌ | ✅ SQLite with trends + stats |
+| Subdomain discovery | ❌ | ✅ Certificate Transparency (crt.sh) |
 
-`Spoofy` requires **Python 3+**. Python 2 is not supported. Usage is shown below:
+## Features
 
-```console
-Usage:
-    ./spoofy.py -d [DOMAIN] -o [stdout or xls] -t [NUMBER_OF_THREADS] [--dkim]
-    OR
-    ./spoofy.py -iL [DOMAIN_LIST] -o [stdout or xls] -t [NUMBER_OF_THREADS] [--dkim]
+### 🏗️ Core Analysis
+- **Authoritative DNS lookups** with Cloudflare fallback (inherited from Spoofy)
+- **SPF** — Record parsing, `all` mechanism analysis, DNS query counter (10-lookup limit)
+- **DMARC** — Policy detection (`none`/`quarantine`/`reject`), subdomain policy, reporting URIs
+- **DKIM** — API lookup + DNS brute-force across 40+ common selectors, RSA key strength analysis (flags weak 1024-bit keys)
+- **BIMI** — Brand indicator record and VMC authority detection
+- **MTA-STS** — TXT record, HTTPS policy fetch (`enforce`/`testing`/`none`), MX pattern validation
+- **TLS-RPT** — Reporting URI detection
+- **MX** — Full enumeration, 20+ provider identification (Google, Microsoft, Proofpoint, Mimecast, etc.), STARTTLS support check, reverse DNS (PTR) validation
+- **Spoofability** — Real-world tested SPF+DMARC combination logic
 
-Options:
-    -d      : Process a single domain.
-    -iL     : Provide a file containing a list of domains to process.
-    -o      : Specify the output format: stdout (default), xls, or json.
-    -t      : Set the number of threads to use (default: 4).
-    --dkim  : Enable DKIM selector enumeration via API (optional).
+### 📊 Intelligence
+- **Security Scoring** — 0–100 composite score across 7 weighted categories:
+  - SPF (20pts), DMARC (25pts), DKIM (15pts), BIMI (5pts), Spoof Resistance (15pts), MTA-STS (10pts), MX (10pts)
+- **Letter Grades** — A+ through F with +/- modifiers
+- **Remediation Engine** — Prioritized recommendations (Critical → Info) with category tagging
+- **Scan History** — SQLite database with trend analysis, per-domain history, aggregate stats
+- **Subdomain Discovery** — Certificate Transparency log queries via crt.sh
 
-Examples:
-    ./spoofy.py -d example.com -t 10
-    ./spoofy.py -d example.com --dkim
-    ./spoofy.py -iL domains.txt -o xls
-    ./spoofy.py -iL domains.txt -o json --dkim
+### 🌐 Web Platform
+- **Web Dashboard** — Dark-themed single-page app with scan, history, and subdomain tabs
+- **REST API** — FastAPI-powered with auto-generated docs at `/docs`
+- **Score Visualizations** — Animated score bars, trend charts, grade badges
+- **Remediation Cards** — Color-coded by severity with expandable protocol details
+- **Bulk Operations** — Scan up to 50 domains concurrently via API
 
-Install Dependencies:
-    pip3 install -r requirements.txt
+### 📄 Output Formats
+- `stdout` — Color-coded terminal table
+- `html` — Interactive dark-themed HTML report with executive summary
+- `json` — Machine-readable JSON
+- `csv` — Spreadsheet-compatible CSV
+- `xls` — Excel workbook via openpyxl
+- `md` — Markdown table
+
+## Installation
+
+**Requires Python 3.10+**
+
+```bash
+# Clone the repository
+git clone https://github.com/fdhin/Spoofy.git SpoofyVibe
+cd SpoofyVibe
+
+# Install dependencies
+pip3 install -r requirements.txt
 ```
 
-## HOW DO YOU KNOW ITS SPOOFABLE
+### Dependencies
 
-(The spoofability table lists every combination of SPF and DMARC configurations that impact deliverability to the inbox, except for DKIM modifiers.)
-[Download Here](/files/Master_Table.xlsx)
+| Package | Purpose |
+|---------|---------|
+| `dnspython` | DNS resolution |
+| `tldextract` | Domain parsing |
+| `colorama` | Terminal colors |
+| `pandas` | Data handling |
+| `openpyxl` | Excel export |
+| `requests` | HTTP (DKIM API, crt.sh, MTA-STS) |
+| `fastapi` | Web API (optional, for `--serve`) |
+| `uvicorn` | ASGI server (optional, for `--serve`) |
 
-## METHODOLOGY
+## Usage
 
-The creation of the spoofability table involved listing every relevant SPF and DMARC configuration, combining them, and then conducting SPF and DMARC information collection using an early version of Spoofy on a large number of US government domains. Testing if an SPF and DMARC combination was spoofable or not was done using the email security pentesting suite at [emailspooftest](https://emailspooftest.com/) using Microsoft 365. However, the initial testing was conducted using Protonmail and Gmail, but these services were found to utilize reverse lookup checks that affected the results, particularly for subdomain spoof testing. As a result, Microsoft 365 was used for the testing, as it offered greater control over the handling of mail.
+### CLI Mode
 
-After the initial testing using Microsoft 365, some combinations were retested using Protonmail and Gmail due to the differences in their handling of banners in emails. Protonmail and Gmail can place spoofed mail in the inbox with a banner or in spam without a banner, leading to some SPF and DMARC combinations being reported as "Mailbox Dependent" when using Spoofy. In contrast, Microsoft 365 places both conditions in spam. The testing and data collection process took several days to complete, after which a good master table was compiled and used as the basis for the Spoofy spoofability logic.
+```bash
+# Scan a single domain
+python3 spoofy.py -d example.com
 
-## DISCLAIMER
+# Scan with DKIM enumeration
+python3 spoofy.py -d example.com --dkim
+
+# Scan multiple domains from a file
+python3 spoofy.py -iL domains.txt -o html
+
+# Scan with subdomain discovery
+python3 spoofy.py -d example.com --subdomains
+
+# Save results to history database
+python3 spoofy.py -iL domains.txt --save-history
+
+# JSON output with 20 concurrent scans
+python3 spoofy.py -iL domains.txt -o json -c 20
+
+# Skip STARTTLS checks (faster, no port 25)
+python3 spoofy.py -d example.com --no-starttls
+
+# Verbose debug logging
+python3 spoofy.py -d example.com -v
+```
+
+### Web Dashboard
+
+```bash
+# Launch the web dashboard and API
+python3 spoofy.py --serve
+
+# Custom port
+python3 spoofy.py --serve --port 9090
+```
+
+Then open `http://localhost:8080` in your browser. API docs available at `http://localhost:8080/docs`.
+
+### All CLI Options
+
+```
+Options:
+    -d              Single domain to process
+    -iL             File containing list of domains
+    -o              Output: stdout (default), html, json, csv, xls, md
+    -c, --concurrency  Max concurrent scans (default: 10)
+    --dkim          Enable DKIM selector enumeration
+    --no-remediation   Disable remediation advice
+    --no-starttls   Skip STARTTLS checks on MX hosts
+    --subdomains    Discover subdomains via CT logs before scanning
+    --save-history  Save results to local SQLite database
+    --serve         Launch web dashboard and REST API
+    --port          Web server port (default: 8080)
+    -v, --verbose   Debug logging
+```
+
+### REST API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/scan/{domain}` | Scan a single domain |
+| `POST` | `/api/scan` | Bulk scan (up to 50 domains) |
+| `GET` | `/api/history` | List scan history (paginated) |
+| `GET` | `/api/history/{domain}` | Domain history + score trend |
+| `GET` | `/api/history/detail/{id}` | Full scan detail |
+| `GET` | `/api/stats` | Aggregate statistics |
+| `GET` | `/api/subdomains/{domain}` | Subdomain discovery |
+| `DELETE` | `/api/history/{domain}` | Delete domain history |
+
+## Scoring System
+
+Each domain receives a score out of 100 across 7 categories:
+
+| Category | Max Points | What's Measured |
+|----------|-----------|-----------------|
+| SPF | 20 | Record exists, valid syntax, `-all`, DNS lookup count |
+| DMARC | 25 | Record exists, `p=reject`, subdomain policy, `pct=100`, reporting |
+| DKIM | 15 | Selectors found, 2048+ bit keys |
+| BIMI | 5 | Record exists, VMC authority |
+| Spoof Resistance | 15 | Not spoofable (15), maybe (8), spoofable (0) |
+| MTA-STS | 10 | Policy exists, `enforce` mode, TLS-RPT |
+| MX | 10 | Records exist, STARTTLS, valid PTR, multiple MX |
+
+Grades: **A+** (95+), **A** (90+), **B+** (85+), **B** (80+), **B-** (75+), **C+** (65+), **C** (55+), **C-** (45+), **D+** (35+), **D** (25+), **D-** (15+), **F** (<15)
+
+## Spoofability Logic
+
+SpoofyVibe inherits the battle-tested spoofability table from the original Spoofy project. Every combination of SPF and DMARC configuration was manually tested using [emailspooftest](https://emailspooftest.com/) against Microsoft 365, Gmail, and Protonmail. See the methodology section in the [original project](https://github.com/MattKeeley/Spoofy) and download the [master table](/files/Master_Table.xlsx).
+
+## Project Structure
+
+```
+SpoofyVibe/
+├── spoofy.py              # Main entry point (CLI + server launcher)
+├── api/
+│   ├── app.py             # FastAPI REST API
+│   └── static/
+│       └── index.html     # Web dashboard SPA
+├── modules/
+│   ├── dns.py             # Authoritative DNS resolution
+│   ├── spf.py             # SPF record analysis
+│   ├── dmarc.py           # DMARC record analysis
+│   ├── dkim.py            # DKIM enumeration + key analysis
+│   ├── bimi.py            # BIMI record detection
+│   ├── mta_sts.py         # MTA-STS + TLS-RPT analysis
+│   ├── mx.py              # MX enumeration + provider ID
+│   ├── scoring.py         # Security scoring engine
+│   ├── remediation.py     # Remediation advice engine
+│   ├── history.py         # SQLite scan history
+│   ├── subdomain.py       # crt.sh subdomain discovery
+│   ├── html_report.py     # Interactive HTML report generator
+│   ├── report.py          # CSV / Excel / JSON / Markdown output
+│   └── syntax.py          # SPF/DMARC parsing helpers
+├── tests/
+│   ├── test_scoring.py    # Scoring engine tests (16)
+│   ├── test_remediation.py # Remediation engine tests (18)
+│   ├── test_mta_sts.py    # MTA-STS tests (14)
+│   ├── test_mx.py         # MX module tests (15)
+│   ├── test_history.py    # History module tests (22)
+│   ├── test_subdomain.py  # Subdomain module tests (14)
+│   └── test_spoofy.py     # Original Spoofy logic tests (30)
+├── requirements.txt
+└── LICENSE
+```
+
+## Tests
+
+```bash
+# Run all 129 tests
+python3 -m unittest discover -s . -p "test*.py" -v
+```
+
+## 🍝 Vibe Coded
+
+This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, async rewrite, web dashboard, history, subdomain discovery, the 99 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
+
+## Credits
+
+- **[Spoofy](https://github.com/MattKeeley/Spoofy)** by **Matt Keeley** ([@MattKeeley](https://github.com/MattKeeley)) — the original tool and spoofability logic that made this fork possible
+- **[emailspooftest](https://emailspooftest.com/)** — the testing platform used for the original spoofability research
+- **[crt.sh](https://crt.sh/)** — Certificate Transparency log search used for subdomain discovery
+
+## Disclaimer
 
 > This tool is only for testing and academic purposes and can only be used where
 > strict consent has been given. Do not use it for illegal purposes! It is the
-> end user’s responsibility to obey all applicable local, state and federal laws.
+> end user's responsibility to obey all applicable local, state and federal laws.
 > Developers assume no liability and are not responsible for any misuse or damage
 > caused by this tool and software.
 
-## LICENSE
+## License
 
-This project is licensed under the Creative Commons Zero v1.0 Universal - see the [LICENSE](LICENSE) file for details
+This project is licensed under the Creative Commons Zero v1.0 Universal — see the [LICENSE](LICENSE) file for details.

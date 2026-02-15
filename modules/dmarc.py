@@ -2,6 +2,9 @@
 
 import dns.resolver
 import tldextract
+import logging
+
+logger = logging.getLogger("spoofyvibe.dmarc")
 
 
 class DMARC:
@@ -28,6 +31,7 @@ class DMARC:
         """Returns the DMARC record for the domain."""
         subdomain = tldextract.extract(self.domain).registered_domain
         if subdomain != self.domain:
+            logger.debug("Domain %s is a subdomain, checking parent %s", self.domain, subdomain)
             return self.get_dmarc_record_for_domain(subdomain)
 
         return self.get_dmarc_record_for_domain(self.domain)
@@ -37,49 +41,65 @@ class DMARC:
             resolver = dns.resolver.Resolver()
             if self.dns_server:
                 resolver.nameservers = [self.dns_server]
+            logger.debug("Querying _dmarc.%s TXT", domain)
             dmarc = resolver.resolve(f"_dmarc.{domain}", "TXT")
-        except Exception:
+        except dns.resolver.NXDOMAIN:
+            logger.debug("No DMARC record (NXDOMAIN) for %s", domain)
+            return None
+        except dns.resolver.NoAnswer:
+            logger.debug("No DMARC answer for %s", domain)
+            return None
+        except dns.resolver.Timeout:
+            logger.warning("DMARC query timeout for %s", domain)
+            return None
+        except dns.resolver.NoNameservers:
+            logger.warning("No nameservers available for DMARC query on %s", domain)
+            return None
+        except Exception as e:
+            logger.error("Unexpected error querying DMARC for %s: %s", domain, e)
             return None
 
         for dns_data in dmarc:
             if "DMARC1" in str(dns_data):
-                return str(dns_data).replace('"', "")
+                record = str(dns_data).replace('"', "")
+                logger.debug("Found DMARC for %s: %s", domain, record)
+                return record
         return None
 
     def get_dmarc_policy(self):
         """Returns the policy value from a DMARC record."""
         if "p=" in str(self.dmarc_record):
-            return str(self.dmarc_record).split("p=")[1].split(";")[0]
+            return str(self.dmarc_record).split("p=")[1].split(";")[0].strip()
         return None
 
     def get_dmarc_pct(self):
         """Returns the pct value from a DMARC record."""
         if "pct=" in str(self.dmarc_record):
-            return str(self.dmarc_record).split("pct=")[1].split(";")[0]
+            return str(self.dmarc_record).split("pct=")[1].split(";")[0].strip()
         return None
 
     def get_dmarc_aspf(self):
         """Returns the aspf value from a DMARC record"""
         if "aspf=" in str(self.dmarc_record):
-            return str(self.dmarc_record).split("aspf=")[1].split(";")[0]
+            return str(self.dmarc_record).split("aspf=")[1].split(";")[0].strip()
         return None
 
     def get_dmarc_subdomain_policy(self):
         """Returns the policy to apply for subdomains from a DMARC record."""
         if "sp=" in str(self.dmarc_record):
-            return str(self.dmarc_record).split("sp=")[1].split(";")[0]
+            return str(self.dmarc_record).split("sp=")[1].split(";")[0].strip()
         return None
 
     def get_dmarc_forensic_reports(self):
         """Returns the email addresses to which forensic reports should be sent."""
         if "ruf=" in str(self.dmarc_record) and "fo=1" in str(self.dmarc_record):
-            return str(self.dmarc_record).split("ruf=")[1].split(";")[0]
+            return str(self.dmarc_record).split("ruf=")[1].split(";")[0].strip()
         return None
 
     def get_dmarc_aggregate_reports(self):
         """Returns the email addresses to which aggregate reports should be sent."""
         if "rua=" in str(self.dmarc_record):
-            return str(self.dmarc_record).split("rua=")[1].split(";")[0]
+            return str(self.dmarc_record).split("rua=")[1].split(";")[0].strip()
         return None
 
     def __str__(self):
