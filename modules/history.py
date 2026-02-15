@@ -87,9 +87,24 @@ class ScanHistory:
                 ("schema_version", str(SCHEMA_VERSION)),
             )
             conn.commit()
+
+            # Migrate from v1 → v2: add dnssec_score column
+            self._migrate(conn)
+
             logger.debug("Database initialized at %s", self.db_path)
         finally:
             conn.close()
+
+    def _migrate(self, conn):
+        """Run schema migrations for existing databases."""
+        # Check existing columns to see if migration is needed
+        cursor = conn.execute("PRAGMA table_info(scans)")
+        columns = {row["name"] for row in cursor.fetchall()}
+
+        if "dnssec_score" not in columns:
+            logger.info("Migrating database: adding dnssec_score column")
+            conn.execute("ALTER TABLE scans ADD COLUMN dnssec_score INTEGER")
+            conn.commit()
 
     def save_scan(self, result):
         """
