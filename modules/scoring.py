@@ -4,13 +4,14 @@
 Weighted scoring engine for email security posture.
 
 Computes a 0-100 score and A+→F letter grade per domain based on:
-  - SPF configuration (20 pts)
+  - SPF configuration (18 pts)
   - DMARC configuration (25 pts)
   - DKIM presence & key strength (15 pts)
   - BIMI presence (5 pts)
   - Spoofability verdict (15 pts)
   - MTA-STS & TLS-RPT (10 pts)
-  - MX infrastructure (10 pts)
+  - MX infrastructure (7 pts)
+  - DNSSEC (5 pts)
 """
 
 
@@ -56,21 +57,24 @@ class SecurityScore:
         spoof_score = self._score_spoofability()
         mta_sts_score = self._score_mta_sts()
         mx_score = self._score_mx()
+        dnssec_score = self._score_dnssec()
 
         self.breakdown = {
-            "spf": {"score": spf_score, "max": 20, "details": self._spf_details()},
+            "spf": {"score": spf_score, "max": 18, "details": self._spf_details()},
             "dmarc": {"score": dmarc_score, "max": 25, "details": self._dmarc_details()},
             "dkim": {"score": dkim_score, "max": 15, "details": self._dkim_details()},
             "bimi": {"score": bimi_score, "max": 5, "details": self._bimi_details()},
             "spoofability": {"score": spoof_score, "max": 15, "details": self._spoof_details()},
             "mta_sts": {"score": mta_sts_score, "max": 10, "details": self._mta_sts_details()},
-            "mx": {"score": mx_score, "max": 10, "details": self._mx_details()},
+            "mx": {"score": mx_score, "max": 7, "details": self._mx_details()},
+            "dnssec": {"score": dnssec_score, "max": 5, "details": self._dnssec_details()},
         }
 
-        return spf_score + dmarc_score + dkim_score + bimi_score + spoof_score + mta_sts_score + mx_score
+        return (spf_score + dmarc_score + dkim_score + bimi_score
+                + spoof_score + mta_sts_score + mx_score + dnssec_score)
 
     def _score_spf(self):
-        """Score SPF configuration (0-20 points)."""
+        """Score SPF configuration (0-18 points)."""
         score = 0
         spf = self.result.get("SPF")
         spf_all = self.result.get("SPF_MULTIPLE_ALLS")
@@ -94,11 +98,11 @@ class SecurityScore:
         elif spf_all == "?all":
             score += 1
 
-        # DNS lookup count within limit (+4)
+        # DNS lookup count within limit (+2)
         if not too_many:
-            score += 4
+            score += 2
 
-        return min(score, 20)
+        return min(score, 18)
 
     def _score_dmarc(self):
         """Score DMARC configuration (0-25 points)."""
@@ -235,18 +239,17 @@ class SecurityScore:
         return min(score, 10)
 
     def _score_mx(self):
-        """Score MX infrastructure (0-10 points)."""
+        """Score MX infrastructure (0-7 points)."""
         score = 0
         mx_records = self.result.get("MX_RECORDS", [])
         mx_count = self.result.get("MX_COUNT", 0)
         all_starttls = self.result.get("MX_ALL_STARTTLS")
-        all_ptr = self.result.get("MX_ALL_PTR")
 
         if mx_count == 0:
             return 0
 
-        # MX records exist (+3)
-        score += 3
+        # MX records exist (+2)
+        score += 2
 
         # Multiple MX for redundancy (+2)
         if mx_count >= 2:
@@ -258,11 +261,25 @@ class SecurityScore:
         elif all_starttls is None:
             score += 1  # Could not determine
 
-        # All MX have valid PTR (+2)
-        if all_ptr is True:
+        return min(score, 7)
+
+    def _score_dnssec(self):
+        """Score DNSSEC configuration (0-5 points)."""
+        score = 0
+        enabled = self.result.get("DNSSEC_ENABLED", False)
+        has_ds = self.result.get("DNSSEC_HAS_DS", False)
+
+        if not enabled:
+            return 0
+
+        # DNSKEY records present (+3)
+        score += 3
+
+        # DS record in parent zone — chain of trust verified (+2)
+        if has_ds:
             score += 2
 
-        return min(score, 10)
+        return min(score, 5)
 
     def _calculate_grade(self):
         """Convert numeric score to letter grade."""
@@ -504,6 +521,26 @@ class SecurityScore:
             details.append(("✅", "All MX hosts have valid PTR records"))
         elif all_ptr is False:
             details.append(("⚠️", "Not all MX hosts have valid PTR records"))
+
+        return details
+
+    def _dnssec_details(self):
+        """Return detail items for DNSSEC scoring."""
+        details = []
+        enabled = self.result.get("DNSSEC_ENABLED", False)
+        has_ds = self.result.get("DNSSEC_HAS_DS", False)
+        key_count = self.result.get("DNSSEC_KEY_COUNT", 0)
+
+        if not enabled:
+            details.append(("⚠️", "DNSSEC is not enabled"))
+            return details
+
+        details.append(("✅", f"DNSSEC enabled ({key_count} DNSKEY record(s))"))
+
+        if has_ds:
+            details.append(("✅", "DS record found — chain of trust verified"))
+        else:
+            details.append(("⚠️", "No DS record in parent zone — chain of trust incomplete"))
 
         return details
 

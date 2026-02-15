@@ -19,7 +19,7 @@ DEFAULT_DB_DIR = os.path.expanduser("~/.spoofyvibe")
 DEFAULT_DB_PATH = os.path.join(DEFAULT_DB_DIR, "history.db")
 
 # Schema version for future migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ScanHistory:
@@ -69,6 +69,7 @@ class ScanHistory:
                     spoof_score INTEGER,
                     mta_sts_score INTEGER,
                     mx_score INTEGER,
+                    dnssec_score INTEGER,
                     result_json TEXT NOT NULL
                 );
 
@@ -122,8 +123,8 @@ class ScanHistory:
                 """INSERT INTO scans
                    (domain, timestamp, score, grade, spoofable,
                     spf_score, dmarc_score, dkim_score, bimi_score,
-                    spoof_score, mta_sts_score, mx_score, result_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    spoof_score, mta_sts_score, mx_score, dnssec_score, result_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     domain,
                     timestamp,
@@ -137,6 +138,7 @@ class ScanHistory:
                     breakdown.get("spoofability", {}).get("score", 0),
                     breakdown.get("mta_sts", {}).get("score", 0),
                     breakdown.get("mx", {}).get("score", 0),
+                    breakdown.get("dnssec", {}).get("score", 0),
                     json.dumps(result, default=str),
                 ),
             )
@@ -165,8 +167,8 @@ class ScanHistory:
                     """INSERT INTO scans
                        (domain, timestamp, score, grade, spoofable,
                         spf_score, dmarc_score, dkim_score, bimi_score,
-                        spoof_score, mta_sts_score, mx_score, result_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        spoof_score, mta_sts_score, mx_score, dnssec_score, result_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         domain, timestamp, score, grade, spoofable_int,
                         breakdown.get("spf", {}).get("score", 0),
@@ -176,6 +178,7 @@ class ScanHistory:
                         breakdown.get("spoofability", {}).get("score", 0),
                         breakdown.get("mta_sts", {}).get("score", 0),
                         breakdown.get("mx", {}).get("score", 0),
+                        breakdown.get("dnssec", {}).get("score", 0),
                         json.dumps(result, default=str),
                     ),
                 )
@@ -199,7 +202,7 @@ class ScanHistory:
                 rows = conn.execute(
                     """SELECT id, domain, timestamp, score, grade, spoofable,
                               spf_score, dmarc_score, dkim_score, bimi_score,
-                              spoof_score, mta_sts_score, mx_score
+                              spoof_score, mta_sts_score, mx_score, dnssec_score
                        FROM scans WHERE domain LIKE ?
                        ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
                     (f"%{domain_filter}%", limit, offset),
@@ -208,7 +211,7 @@ class ScanHistory:
                 rows = conn.execute(
                     """SELECT id, domain, timestamp, score, grade, spoofable,
                               spf_score, dmarc_score, dkim_score, bimi_score,
-                              spoof_score, mta_sts_score, mx_score
+                              spoof_score, mta_sts_score, mx_score, dnssec_score
                        FROM scans
                        ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
                     (limit, offset),
@@ -260,7 +263,7 @@ class ScanHistory:
             rows = conn.execute(
                 """SELECT timestamp, score, grade,
                           spf_score, dmarc_score, dkim_score, bimi_score,
-                          spoof_score, mta_sts_score, mx_score
+                          spoof_score, mta_sts_score, mx_score, dnssec_score
                    FROM scans WHERE domain = ?
                    ORDER BY timestamp ASC LIMIT ?""",
                 (domain, limit),

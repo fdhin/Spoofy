@@ -44,6 +44,10 @@ class TestSecurityScore(unittest.TestCase):
             "MX_ALL_STARTTLS": None,
             "MX_ALL_PTR": None,
             "MX_PROVIDERS": [],
+            # DNSSEC defaults
+            "DNSSEC_ENABLED": False,
+            "DNSSEC_HAS_DS": False,
+            "DNSSEC_KEY_COUNT": 0,
         }
         base.update(overrides)
         return base
@@ -84,6 +88,9 @@ class TestSecurityScore(unittest.TestCase):
             MX_COUNT=2,
             MX_ALL_STARTTLS=True,
             MX_ALL_PTR=True,
+            DNSSEC_ENABLED=True,
+            DNSSEC_HAS_DS=True,
+            DNSSEC_KEY_COUNT=3,
         )
         score = SecurityScore(result)
         self.assertEqual(score.score, 100)
@@ -105,10 +112,10 @@ class TestSecurityScore(unittest.TestCase):
             SPF_TOO_MANY_DNS_QUERIES=False,
         )
         score = SecurityScore(result)
-        # SPF: 5+3+8+4 = 20, everything else 0
-        self.assertEqual(score.breakdown["spf"]["score"], 20)
+        # SPF: 5+3+8+2 = 18, everything else 0
+        self.assertEqual(score.breakdown["spf"]["score"], 18)
         self.assertEqual(score.breakdown["dmarc"]["score"], 0)
-        self.assertEqual(score.score, 20)
+        self.assertEqual(score.score, 18)
 
     def test_softfail_spf_scores_lower(self):
         """~all should score less than -all."""
@@ -179,7 +186,7 @@ class TestSecurityScore(unittest.TestCase):
         score_ok = SecurityScore(result_ok)
         score_bad = SecurityScore(result_bad)
         self.assertEqual(
-            score_ok.breakdown["spf"]["score"] - score_bad.breakdown["spf"]["score"], 4
+            score_ok.breakdown["spf"]["score"] - score_bad.breakdown["spf"]["score"], 2
         )
 
     def test_to_dict_returns_expected_keys(self):
@@ -232,10 +239,10 @@ class TestSecurityScore(unittest.TestCase):
         self.assertEqual(score.breakdown["bimi"]["score"], 4)
 
     def test_breakdown_has_all_categories(self):
-        """Score breakdown includes all 7 categories."""
+        """Score breakdown includes all 8 categories."""
         result = self._make_result()
         score = SecurityScore(result)
-        expected_cats = {"spf", "dmarc", "dkim", "bimi", "spoofability", "mta_sts", "mx"}
+        expected_cats = {"spf", "dmarc", "dkim", "bimi", "spoofability", "mta_sts", "mx", "dnssec"}
         self.assertEqual(set(score.breakdown.keys()), expected_cats)
 
 

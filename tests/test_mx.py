@@ -164,7 +164,7 @@ class TestMX(unittest.TestCase):
             "MX_PROVIDERS": ["Unknown"],
         }
         score = SecurityScore(result)
-        self.assertEqual(score.breakdown["mx"]["score"], 10)  # 3 + 2 + 3 + 2
+        self.assertEqual(score.breakdown["mx"]["score"], 7)  # 2 + 2 + 3
 
     def test_scoring_single_mx_no_tls(self):
         """Single MX without STARTTLS gets minimal score."""
@@ -180,7 +180,7 @@ class TestMX(unittest.TestCase):
             "MX_ALL_PTR": False,
         }
         score = SecurityScore(result)
-        self.assertEqual(score.breakdown["mx"]["score"], 3)  # Just MX exists
+        self.assertEqual(score.breakdown["mx"]["score"], 2)  # Just MX exists
 
     # --- Remediation integration tests ---
 

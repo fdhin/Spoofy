@@ -11,6 +11,8 @@ from modules.dkim import DKIM
 from modules.bimi import BIMI
 from modules.mx import MX
 from modules.mta_sts import MTASTS
+from modules.dnssec import DNSSEC
+from modules.m365 import M365Tenant
 from modules.spoofing import Spoofing
 from modules.scoring import SecurityScore
 from modules.remediation import RemediationEngine
@@ -36,9 +38,15 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
     bimi_future = loop.run_in_executor(None, BIMI, domain, server)
     mx_future = loop.run_in_executor(None, lambda: MX(domain, server, check_starttls=check_starttls))
     mta_sts_future = loop.run_in_executor(None, MTASTS, domain, server)
+    dnssec_future = loop.run_in_executor(None, DNSSEC, domain, server)
 
-    spf, dmarc, bimi_info, mx_info, mta_sts = await asyncio.gather(
-        spf_future, dmarc_future, bimi_future, mx_future, mta_sts_future
+    spf, dmarc, bimi_info, mx_info, mta_sts, dnssec_info = await asyncio.gather(
+        spf_future, dmarc_future, bimi_future, mx_future, mta_sts_future, dnssec_future
+    )
+
+    # M365 tenant detection (uses MX results, so runs after MX)
+    m365_info = await loop.run_in_executor(
+        None, lambda: M365Tenant(domain, mx_info.to_dict().get("MX_RECORDS", []), server)
     )
 
     # DKIM can be slow (API + DNS brute-force), run if enabled
@@ -96,6 +104,12 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
     # Add MTA-STS data
     result.update(mta_sts.to_dict())
     result["MTA_STS_MX_MISMATCH"] = mta_sts_mx_mismatch
+
+    # Add DNSSEC data
+    result.update(dnssec_info.to_dict())
+
+    # Add M365 data
+    result.update(m365_info.to_dict())
 
     # Calculate security score
     score = SecurityScore(result)
@@ -212,6 +226,11 @@ def main():
         help="Save scan results to local SQLite history database",
     )
     parser.add_argument(
+        "--expand-tenant",
+        action="store_true",
+        help="If M365 tenant domains are discovered, add them to the scan scope",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -278,6 +297,29 @@ def main():
             check_starttls=check_starttls,
         )
     )
+
+    # Expand M365 tenant domains if requested
+    if args.expand_tenant and results:
+        tenant_domains = []
+        existing = set(d.lower() for d in domains)
+        for r in results:
+            for td in r.get("M365_TENANT_DOMAINS", []):
+                if td.lower() not in existing:
+                    tenant_domains.append(td)
+                    existing.add(td.lower())
+                    print(f"[*] Microsoft tenant domain discovered: {td}")
+        if tenant_domains:
+            tenant_results = asyncio.run(
+                process_domains(
+                    tenant_domains,
+                    args.o,
+                    enable_dkim=args.dkim,
+                    enable_remediation=enable_remediation,
+                    concurrency=args.concurrency,
+                    check_starttls=check_starttls,
+                )
+            )
+            results.extend(tenant_results)
 
     # Save to history if requested
     if args.save_history and results:

@@ -74,6 +74,7 @@ class RemediationEngine:
         recs.extend(self._check_spoofability())
         recs.extend(self._check_mta_sts())
         recs.extend(self._check_mx())
+        recs.extend(self._check_dnssec())
         # Sort by priority (critical first)
         recs.sort(key=lambda r: r.priority)
         return recs
@@ -763,6 +764,63 @@ class RemediationEngine:
                     reference="https://datatracker.ietf.org/doc/html/rfc5321#section-4.1.3",
                 )
             )
+
+        return recs
+
+    # ---- DNSSEC ----
+
+    def _check_dnssec(self):
+        recs = []
+        domain = self.result.get("DOMAIN", "this domain")
+        enabled = self.result.get("DNSSEC_ENABLED", False)
+        has_ds = self.result.get("DNSSEC_HAS_DS", False)
+
+        if not enabled:
+            recs.append(Recommendation(
+                priority=4,
+                category="DNSSEC",
+                title="DNSSEC is not enabled",
+                description=(
+                    f"The domain {domain} does not have DNSSEC enabled. "
+                    "DNSSEC protects against DNS spoofing and cache poisoning by "
+                    "cryptographically signing DNS records."
+                ),
+                impact=(
+                    "Without DNSSEC, DNS responses can be forged by attackers "
+                    "(man-in-the-middle), potentially redirecting email traffic "
+                    "or undermining SPF/DKIM/DMARC validation."
+                ),
+                fix=(
+                    "Enable DNSSEC signing at your DNS provider. Most managed DNS "
+                    "services (Cloudflare, Route 53, Google Cloud DNS) offer "
+                    "one-click DNSSEC activation. After enabling, add the DS record "
+                    "to your domain registrar."
+                ),
+                reference="https://www.icann.org/resources/pages/dnssec-what-is-it-why-is-it-important-2019-03-05-en",
+            ))
+        elif not has_ds:
+            recs.append(Recommendation(
+                priority=3,
+                category="DNSSEC",
+                title="DNSSEC chain of trust incomplete — no DS record in parent zone",
+                description=(
+                    f"The domain {domain} has DNSKEY records (DNSSEC signing is active) "
+                    "but no DS record was found in the parent zone. This means the "
+                    "chain of trust is not established."
+                ),
+                impact=(
+                    "Without a DS record in the parent zone, resolvers cannot "
+                    "validate the DNSSEC signatures. The signing is effectively "
+                    "ignored by validating resolvers."
+                ),
+                fix=(
+                    "Add the DS record to your domain registrar. The DS record is "
+                    "generated from your DNSKEY and must be published in the parent "
+                    "zone (e.g. .com). Your DNS provider should provide the DS record "
+                    "values to submit to your registrar."
+                ),
+                reference="https://www.cloudflare.com/dns/dnssec/how-dnssec-works/",
+            ))
 
         return recs
 

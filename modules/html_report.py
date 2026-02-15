@@ -150,6 +150,7 @@ def _build_domain_card(result):
         "spoofability": "Spoof Resistance",
         "mta_sts": "MTA-STS & TLS-RPT",
         "mx": "MX Infrastructure",
+        "dnssec": "DNSSEC",
     }
     for cat_key, cat_label in category_labels.items():
         cat = breakdown.get(cat_key, {})
@@ -233,6 +234,14 @@ def _build_domain_card(result):
       <div class="record-item">
         <div class="record-label">MX Records ({mx_count})</div>
         <div class="record-value">{_esc(mx_provider_str)}</div>
+      </div>
+      <div class="record-item">
+        <div class="record-label">DNSSEC</div>
+        <div class="record-value">{'✅ Enabled' if result.get('DNSSEC_ENABLED') else '⚠️ Not enabled'}{' — DS verified' if result.get('DNSSEC_HAS_DS') else ''}</div>
+      </div>
+      <div class="record-item">
+        <div class="record-label">Microsoft 365</div>
+        <div class="record-value">{'☁️ Detected — Tenant: ' + _esc(result.get('M365_TENANT_NAME', '')) if result.get('M365_DETECTED') else 'Not detected'}</div>
       </div>
       <div class="record-item">
         <div class="record-label">DNS Server</div>
