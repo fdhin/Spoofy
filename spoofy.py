@@ -19,6 +19,7 @@ from modules.scoring import SecurityScore
 from modules.remediation import RemediationEngine
 from modules import report
 from modules.html_report import generate_html_report
+from modules.pdf_report import generate_pdf_report
 
 
 async def process_domain(domain, enable_dkim=False, enable_remediation=True,
@@ -198,7 +199,7 @@ def main():
     parser.add_argument(
         "-o",
         type=str,
-        choices=["stdout", "xls", "json", "html", "csv", "md"],
+        choices=["stdout", "xls", "json", "html", "pdf", "csv", "md"],
         default="stdout",
         help="Output format: stdout, xls, json, html, csv, or md (default: stdout).",
     )
@@ -343,6 +344,9 @@ def main():
     elif args.o == "html" and results:
         fname = generate_html_report(results)
         print(f"HTML report written to {fname}")
+    elif args.o == "pdf" and results:
+        fname = generate_pdf_report(results)
+        print(f"PDF report written to {fname}")
     elif args.o == "csv" and results:
         report.write_to_csv(results)
         print("Results written to output.csv")

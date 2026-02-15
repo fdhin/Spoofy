@@ -6,3 +6,4 @@ openpyxl
 requests
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+fpdf2>=2.7.0

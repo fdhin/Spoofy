@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from spoofy import process_domain  # noqa: E402
 from modules.history import ScanHistory  # noqa: E402
 from modules.subdomain import SubdomainFinder  # noqa: E402
+from modules.pdf_report import generate_pdf_report  # noqa: E402
 
 logger = logging.getLogger("spoofyvibe.api")
 
@@ -209,3 +210,27 @@ async def delete_domain_history(domain: str):
     """Delete all scan history for a domain."""
     history.delete_domain(domain)
     return {"status": "ok", "message": f"History deleted for {domain}"}
+
+
+# --- PDF Report Endpoint ---
+
+class PDFReportRequest(BaseModel):
+    results: list[dict]
+
+
+@app.post("/api/report/pdf")
+async def generate_pdf(req: PDFReportRequest):
+    """Generate a PDF executive report from scan results."""
+    import tempfile
+    loop = asyncio.get_event_loop()
+
+    tmp_dir = tempfile.mkdtemp(prefix="spoofyvibe_")
+    pdf_path = os.path.join(tmp_dir, "spoofyvibe_report.pdf")
+
+    await loop.run_in_executor(None, generate_pdf_report, req.results, pdf_path)
+
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename="spoofyvibe_report.pdf",
+    )

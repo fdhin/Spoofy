@@ -1066,7 +1066,8 @@
                 const data = await resp.json();
 
                 if (data.results && data.results.length > 0) {
-                    status.innerHTML = `✅ Scanned ${data.results.length} domain${data.results.length > 1 ? 's' : ''} successfully`;
+                    window._lastResults = data.results;
+                    status.innerHTML = `✅ Scanned ${data.results.length} domain${data.results.length > 1 ? 's' : ''} successfully <button onclick="downloadPDF()" style="margin-left:12px;background:linear-gradient(135deg,var(--accent-indigo),var(--accent-cyan));border:none;border-radius:var(--radius-sm);padding:6px 16px;color:#fff;cursor:pointer;font-size:0.8rem;font-weight:600;transition:all 0.2s">📄 Download PDF Report</button>`;
                     data.results.forEach(r => grid.innerHTML += renderResultCard(r));
                 } else {
                     status.innerHTML = '⚠️ No results returned';
@@ -1078,6 +1079,27 @@
                 status.innerHTML = `❌ Error: ${e.message}`;
             }
             btn.disabled = false;
+        }
+
+        async function downloadPDF() {
+            if (!window._lastResults || window._lastResults.length === 0) return;
+            try {
+                const resp = await fetch(API + '/api/report/pdf', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ results: window._lastResults }),
+                });
+                if (!resp.ok) throw new Error('PDF generation failed');
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'spoofyvibe_report.pdf';
+                a.click();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert('PDF download failed: ' + e.message);
+            }
         }
 
         function renderResultCard(r) {

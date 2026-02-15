@@ -37,6 +37,7 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 | Security scoring | ❌ | ✅ 0-100 score, A+ to F grades, 8 categories |
 | Remediation advice | ❌ | ✅ Prioritized recommendations per domain |
 | Interactive HTML report | ❌ | ✅ Glassmorphism dark-themed report |
+| PDF Executive Report | ❌ | ✅ Boardroom-ready, dark-branded PDF |
 | Markdown report | ❌ | ✅ |
 | Async I/O | Threads | Full `asyncio` with configurable concurrency |
 | Web dashboard | ❌ | ✅ FastAPI + SPA dashboard |
@@ -78,6 +79,7 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 ### 📄 Output Formats
 - `stdout` — Color-coded terminal table
 - `html` — Interactive dark-themed HTML report with executive summary
+- `pdf` — Branded executive PDF (cover page, score gauges, remediations)
 - `json` — Machine-readable JSON
 - `csv` — Spreadsheet-compatible CSV
 - `xls` — Excel workbook via openpyxl
@@ -108,6 +110,7 @@ pip3 install -r requirements.txt
 | `requests` | HTTP (DKIM API, crt.sh, MTA-STS) |
 | `fastapi` | Web API (optional, for `--serve`) |
 | `uvicorn` | ASGI server (optional, for `--serve`) |
+| `fpdf2` | PDF report generation |
 
 ## Usage
 
@@ -122,6 +125,9 @@ python3 spoofy.py -d example.com --dkim
 
 # Scan multiple domains from a file
 python3 spoofy.py -iL domains.txt -o html
+
+# Generate a PDF executive report
+python3 spoofy.py -iL domains.txt -o pdf
 
 # Scan with subdomain discovery
 python3 spoofy.py -d example.com --subdomains
@@ -160,7 +166,7 @@ Then open `http://localhost:8080` in your browser. API docs available at `http:/
 Options:
     -d              Single domain to process
     -iL             File containing list of domains
-    -o              Output: stdout (default), html, json, csv, xls, md
+    -o              Output: stdout (default), html, pdf, json, csv, xls, md
     -c, --concurrency  Max concurrent scans (default: 10)
     --dkim          Enable DKIM selector enumeration
     --no-remediation   Disable remediation advice
@@ -184,6 +190,7 @@ Options:
 | `GET` | `/api/history/detail/{id}` | Full scan detail |
 | `GET` | `/api/stats` | Aggregate statistics |
 | `GET` | `/api/subdomains/{domain}` | Subdomain discovery |
+| `POST` | `/api/report/pdf` | Generate PDF executive report |
 | `DELETE` | `/api/history/{domain}` | Delete domain history |
 
 ## Scoring System
@@ -232,6 +239,7 @@ SpoofyVibe/
 │   ├── history.py         # SQLite scan history
 │   ├── subdomain.py       # crt.sh subdomain discovery
 │   ├── html_report.py     # Interactive HTML report generator
+│   ├── pdf_report.py      # PDF executive report generator
 │   ├── report.py          # CSV / Excel / JSON / Markdown output
 │   └── syntax.py          # SPF/DMARC parsing helpers
 ├── tests/
@@ -258,7 +266,7 @@ python3 -m unittest discover -s . -p "test*.py" -v
 
 ## 🍝 Vibe Coded
 
-This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, DNSSEC, DANE, M365 tenant discovery, async rewrite, web dashboard, history, subdomain discovery, the 147 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
+This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, DNSSEC, DANE, M365 tenant discovery, PDF executive reports, async rewrite, web dashboard, history, subdomain discovery, the 147 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
 
 ## Credits
 
