@@ -1122,6 +1122,7 @@
                 { id: 'mx-' + domain, label: 'MX Details', content: renderMXDetails(r) },
                 { id: 'mtasts-' + domain, label: 'MTA-STS Details', content: renderMTASTSDetails(r) },
                 { id: 'dnssec-' + domain, label: 'DNSSEC Details', content: renderDNSSECDetails(r) },
+                { id: 'dane-' + domain, label: 'DANE Details', content: renderDANEDetails(r) },
             ];
 
             let detailBtns = '', detailPanels = '';
@@ -1243,6 +1244,26 @@
                 ['DNSKEY Records', r.DNSSEC_KEY_COUNT || 0],
                 ['DS Algorithm', r.DNSSEC_DS_ALGORITHM || 'N/A'],
             ]);
+        }
+        function renderDANEDetails(r) {
+            const has = r.DANE_HAS_TLSA;
+            const records = r.DANE_TLSA_RECORDS || [];
+            const mx_count = r.DANE_MX_COUNT || 0;
+            const total = r.DANE_TOTAL_MX || 0;
+            let html = detailRows([
+                ['DANE/TLSA Status', has ? `✅ ${mx_count}/${total} MX hosts covered` : '⚠️ No TLSA records found'],
+            ]);
+            if (records.length > 0) {
+                html += '<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">';
+                records.forEach(t => {
+                    html += `<div class="detail-row">
+                        <span class="detail-key">🔐 ${esc(t.mx_host)}</span>
+                        <span class="detail-val">${esc(t.usage_label)} • ${esc(t.selector_label)} • ${esc(t.mtype_label)}</span>
+                    </div>`;
+                });
+                html += '</div>';
+            }
+            return html;
         }
         function renderM365Info(r) {
             if (!r.M365_DETECTED) return '';

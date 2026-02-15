@@ -13,7 +13,7 @@
 
 ---
 
-> **⚡ Fork Notice** — SpoofyVibe is a fork of [Spoofy](https://github.com/MattKeeley/Spoofy) by **Matt Keeley** and contributors. The original tool is an excellent SPF/DMARC spoofability checker with manually tested spoof logic — we owe huge credit to that foundation. SpoofyVibe extends it with scoring, remediation, MTA-STS/MX/DKIM/DNSSEC analysis, M365 tenant discovery, async scanning, a web dashboard, and more. All of this was heavily **vibe coded** with AI assistance. The spaghetti has only gotten spicier. 🍝
+> **⚡ Fork Notice** — SpoofyVibe is a fork of [Spoofy](https://github.com/MattKeeley/Spoofy) by **Matt Keeley** and contributors. The original tool is an excellent SPF/DMARC spoofability checker with manually tested spoof logic — we owe huge credit to that foundation. SpoofyVibe extends it with scoring, remediation, MTA-STS/MX/DKIM/DNSSEC/DANE analysis, M365 tenant discovery, async scanning, a web dashboard, and more. All of this was heavily **vibe coded** with AI assistance. The spaghetti has only gotten spicier. 🍝
 
 ---
 
@@ -32,6 +32,7 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 | MTA-STS & TLS-RPT | ❌ | ✅ Full policy fetch + validation |
 | MX enumeration | ❌ | ✅ Provider ID, STARTTLS, PTR checks |
 | DNSSEC detection | ❌ | ✅ DNSKEY + DS chain-of-trust verification |
+| DANE / TLSA | ❌ | ✅ Per-MX-host TLSA record detection + parsing |
 | M365 tenant discovery | ❌ | ✅ Tenant name extraction + `.onmicrosoft.com` domain enumeration |
 | Security scoring | ❌ | ✅ 0-100 score, A+ to F grades, 8 categories |
 | Remediation advice | ❌ | ✅ Prioritized recommendations per domain |
@@ -55,6 +56,7 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 - **TLS-RPT** — Reporting URI detection
 - **MX** — Full enumeration, 20+ provider identification (Google, Microsoft, Proofpoint, Mimecast, etc.), STARTTLS support check, reverse DNS (PTR) validation
 - **DNSSEC** — DNSKEY record detection, DS record chain-of-trust verification in parent zone
+- **DANE** — TLSA record detection per MX host (`_25._tcp.<mx-host>`), usage/selector/matching-type parsing
 - **M365 Tenant Discovery** — Automatic Microsoft 365 detection from MX records, tenant name extraction, `.onmicrosoft.com` domain enumeration
 - **Spoofability** — Real-world tested SPF+DMARC combination logic
 
@@ -223,6 +225,7 @@ SpoofyVibe/
 │   ├── mta_sts.py         # MTA-STS + TLS-RPT analysis
 │   ├── mx.py              # MX enumeration + provider ID
 │   ├── dnssec.py          # DNSSEC (DNSKEY + DS) detection
+│   ├── dane.py            # DANE/TLSA per-MX-host detection
 │   ├── m365.py            # M365 tenant discovery
 │   ├── scoring.py         # Security scoring engine (8 categories)
 │   ├── remediation.py     # Remediation advice engine
@@ -237,6 +240,7 @@ SpoofyVibe/
 │   ├── test_mta_sts.py    # MTA-STS tests (14)
 │   ├── test_mx.py         # MX module tests (15)
 │   ├── test_dnssec.py     # DNSSEC module tests (14)
+│   ├── test_dane.py       # DANE/TLSA module tests (18)
 │   ├── test_m365.py       # M365 tenant tests (16)
 │   ├── test_history.py    # History module tests (22)
 │   ├── test_subdomain.py  # Subdomain module tests (14)
@@ -248,13 +252,13 @@ SpoofyVibe/
 ## Tests
 
 ```bash
-# Run all 159 tests
+# Run all 177 tests
 python3 -m unittest discover -s . -p "test*.py" -v
 ```
 
 ## 🍝 Vibe Coded
 
-This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, DNSSEC, M365 tenant discovery, async rewrite, web dashboard, history, subdomain discovery, the 129 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
+This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, DNSSEC, DANE, M365 tenant discovery, async rewrite, web dashboard, history, subdomain discovery, the 147 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
 
 ## Credits
 

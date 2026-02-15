@@ -75,6 +75,7 @@ class RemediationEngine:
         recs.extend(self._check_mta_sts())
         recs.extend(self._check_mx())
         recs.extend(self._check_dnssec())
+        recs.extend(self._check_dane())
         # Sort by priority (critical first)
         recs.sort(key=lambda r: r.priority)
         return recs
@@ -820,6 +821,63 @@ class RemediationEngine:
                     "values to submit to your registrar."
                 ),
                 reference="https://www.cloudflare.com/dns/dnssec/how-dnssec-works/",
+            ))
+
+        return recs
+
+    # ---- DANE ----
+
+    def _check_dane(self):
+        recs = []
+        domain = self.result.get("DOMAIN", "this domain")
+        dnssec_enabled = self.result.get("DNSSEC_ENABLED", False)
+        has_tlsa = self.result.get("DANE_HAS_TLSA", False)
+        dane_mx_count = self.result.get("DANE_MX_COUNT", 0)
+        total_mx = self.result.get("DANE_TOTAL_MX", 0)
+
+        if has_tlsa and dane_mx_count < total_mx:
+            recs.append(Recommendation(
+                priority=5,
+                category="DANE",
+                title="DANE/TLSA only covers some MX hosts",
+                description=(
+                    f"Only {dane_mx_count} of {total_mx} MX hosts for {domain} "
+                    "have TLSA records. For full DANE protection, all MX hosts "
+                    "should have published TLSA records."
+                ),
+                impact=(
+                    "MX hosts without TLSA records can still be targeted by "
+                    "man-in-the-middle attacks, even if other MX hosts are protected."
+                ),
+                fix=(
+                    "Publish TLSA records for all MX hosts at _25._tcp.<mx-host>. "
+                    "Use usage=3 (DANE-EE) and selector=1 (SPKI) with SHA-256 "
+                    "matching for the best compatibility."
+                ),
+                reference="https://www.huque.com/pages/dane-smtp.html",
+            ))
+        elif not has_tlsa and dnssec_enabled:
+            recs.append(Recommendation(
+                priority=5,
+                category="DANE",
+                title="Consider adding DANE/TLSA for MX hosts",
+                description=(
+                    f"DNSSEC is enabled for {domain} but no DANE/TLSA records "
+                    "were found. DANE uses TLSA records to cryptographically "
+                    "bind TLS certificates to DNS, preventing certificate-based "
+                    "MITM attacks on mail delivery."
+                ),
+                impact=(
+                    "Without DANE, mail delivery relies solely on the CA system "
+                    "for TLS certificate validation, which is more susceptible "
+                    "to compromise or misissuance."
+                ),
+                fix=(
+                    "Publish TLSA records at _25._tcp.<mx-host> for each MX server. "
+                    "Since DNSSEC is already active, DANE records will be automatically "
+                    "validated by DANE-aware MTAs."
+                ),
+                reference="https://www.huque.com/pages/dane-smtp.html",
             ))
 
         return recs

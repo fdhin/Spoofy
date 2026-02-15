@@ -244,6 +244,10 @@ def _build_domain_card(result):
         <div class="record-value">{'☁️ Detected — Tenant: ' + _esc(result.get('M365_TENANT_NAME', '')) if result.get('M365_DETECTED') else 'Not detected'}</div>
       </div>
       <div class="record-item">
+        <div class="record-label">DANE / TLSA</div>
+        <div class="record-value">{'🔐 ' + str(result.get('DANE_MX_COUNT', 0)) + '/' + str(result.get('DANE_TOTAL_MX', 0)) + ' MX hosts have TLSA records' if result.get('DANE_HAS_TLSA') else 'No TLSA records found'}</div>
+      </div>
+      <div class="record-item">
         <div class="record-label">DNS Server</div>
         <div class="record-value"><code>{_esc(result.get('DNS_SERVER'))}</code></div>
       </div>

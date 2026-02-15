@@ -13,6 +13,7 @@ from modules.mx import MX
 from modules.mta_sts import MTASTS
 from modules.dnssec import DNSSEC
 from modules.m365 import M365Tenant
+from modules.dane import DANE
 from modules.spoofing import Spoofing
 from modules.scoring import SecurityScore
 from modules.remediation import RemediationEngine
@@ -110,6 +111,12 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
 
     # Add M365 data
     result.update(m365_info.to_dict())
+
+    # DANE/TLSA check (needs MX hosts, runs after MX data is collected)
+    dane_info = await loop.run_in_executor(
+        None, lambda: DANE(domain, mx_info.get_mx_hosts(), server)
+    )
+    result.update(dane_info.to_dict())
 
     # Calculate security score
     score = SecurityScore(result)
