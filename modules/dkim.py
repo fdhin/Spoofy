@@ -176,7 +176,12 @@ class DKIM:
             logger.debug("DKIM API response parse error for %s: %s", self.domain, e)
 
     def _brute_force_dns(self):
-        """Try common DKIM selectors via direct DNS lookups."""
+        """Try common DKIM selectors via direct DNS lookups.
+
+        Handles both direct TXT records and CNAME-based selectors (e.g. M365
+        uses CNAME records like selector1._domainkey.example.com pointing to
+        selector1-example-com._domainkey.example.onmicrosoft.com).
+        """
         known_selectors = {s.selector for s in self.selectors}
         resolver = dns.resolver.Resolver()
         if self.dns_server:
@@ -186,26 +191,55 @@ class DKIM:
             if selector in known_selectors:
                 continue
             qname = f"{selector}._domainkey.{self.domain}"
-            try:
-                answers = resolver.resolve(qname, "TXT")
-                for rdata in answers:
-                    txt = str(rdata).replace('"', "")
-                    if "p=" in txt:
-                        sel = DKIMSelector(selector, self.domain, txt, source="dns")
-                        self.selectors.append(sel)
-                        known_selectors.add(selector)
-                        logger.debug("DNS brute-force found DKIM selector: %s for %s",
-                                     selector, self.domain)
-                        break
-            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
-                continue
-            except dns.resolver.Timeout:
-                logger.debug("DNS timeout for DKIM selector %s on %s", selector, self.domain)
-            except Exception:
-                continue
+
+            # Try direct TXT lookup first
+            txt_value = self._resolve_dkim_txt(resolver, qname)
+
+            # If no direct TXT, check for CNAME and follow it
+            if not txt_value:
+                txt_value = self._resolve_dkim_via_cname(resolver, qname)
+
+            if txt_value:
+                sel = DKIMSelector(selector, self.domain, txt_value, source="dns")
+                self.selectors.append(sel)
+                known_selectors.add(selector)
+                logger.debug("DNS brute-force found DKIM selector: %s for %s",
+                             selector, self.domain)
 
         logger.debug("Total DKIM selectors for %s after brute-force: %d",
                      self.domain, len(self.selectors))
+
+    def _resolve_dkim_txt(self, resolver, qname):
+        """Resolve a DKIM TXT record directly. Returns the TXT value or None."""
+        try:
+            answers = resolver.resolve(qname, "TXT")
+            for rdata in answers:
+                txt = str(rdata).replace('"', "")
+                if "p=" in txt:
+                    return txt
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
+                dns.resolver.NoNameservers, dns.resolver.Timeout):
+            pass
+        except Exception:
+            pass
+        return None
+
+    def _resolve_dkim_via_cname(self, resolver, qname):
+        """Check if qname has a CNAME, follow it, and resolve TXT there."""
+        try:
+            cname_answers = resolver.resolve(qname, "CNAME")
+            for rdata in cname_answers:
+                target = str(rdata).rstrip(".")
+                logger.debug("DKIM CNAME found: %s -> %s", qname, target)
+                txt_value = self._resolve_dkim_txt(resolver, target)
+                if txt_value:
+                    return txt_value
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
+                dns.resolver.NoNameservers, dns.resolver.Timeout):
+            pass
+        except Exception:
+            pass
+        return None
 
     def _compile_results(self):
         """Build the legacy dkim_record string and check for weak keys."""
