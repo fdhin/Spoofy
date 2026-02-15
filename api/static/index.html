@@ -1134,7 +1134,9 @@
             // Remediation
             let remedHTML = '';
             if (recommendations.length > 0) {
+                const remedId = 'remed-' + domain.replace(/\./g, '-');
                 const topRecs = recommendations.slice(0, 5);
+                const extraRecs = recommendations.slice(5);
                 remedHTML = '<div style="margin-top:16px">';
                 remedHTML += `<h4 style="color:var(--text-secondary);margin-bottom:8px;font-size:0.85rem">
             💡 Remediation (${recommendations.length} items)</h4>`;
@@ -1150,9 +1152,22 @@
                     <div class="remed-desc">${esc(rec.description || '')}</div>
                 </div>`;
                 });
-                if (recommendations.length > 5) {
-                    remedHTML += `<p style="color:var(--text-muted);font-size:0.8rem;text-align:center;margin-top:8px">
-                + ${recommendations.length - 5} more items</p>`;
+                if (extraRecs.length > 0) {
+                    remedHTML += `<div id="${remedId}" style="display:none">`;
+                    extraRecs.forEach(rec => {
+                        const pri = (rec.priority_label || 'info').toLowerCase();
+                        remedHTML += `
+                <div class="remed-card remed-${pri}">
+                    <div class="remed-header">
+                        <span class="remed-priority pri-${pri}">${rec.priority_label || 'INFO'}</span>
+                        <span class="remed-cat">${rec.category || ''}</span>
+                    </div>
+                    <div class="remed-title">${esc(rec.title || '')}</div>
+                    <div class="remed-desc">${esc(rec.description || '')}</div>
+                </div>`;
+                    });
+                    remedHTML += `</div>`;
+                    remedHTML += `<button onclick="const el=document.getElementById('${remedId}');const show=el.style.display==='none';el.style.display=show?'block':'none';this.textContent=show?'▲ Show fewer':'▼ + ${extraRecs.length} more items'" style="display:block;margin:8px auto 0;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 16px;color:var(--accent-cyan);cursor:pointer;font-size:0.8rem;transition:all 0.2s">▼ + ${extraRecs.length} more items</button>`;
                 }
                 remedHTML += '</div>';
             }
