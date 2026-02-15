@@ -13,7 +13,7 @@
 
 ---
 
-> **⚡ Fork Notice** — SpoofyVibe is a fork of [Spoofy](https://github.com/MattKeeley/Spoofy) by **Matt Keeley** and contributors. The original tool is an excellent SPF/DMARC spoofability checker with manually tested spoof logic — we owe huge credit to that foundation. SpoofyVibe extends it with scoring, remediation, MTA-STS/MX/DKIM analysis, async scanning, a web dashboard, and more. All of this was heavily **vibe coded** with AI assistance. The spaghetti has only gotten spicier. 🍝
+> **⚡ Fork Notice** — SpoofyVibe is a fork of [Spoofy](https://github.com/MattKeeley/Spoofy) by **Matt Keeley** and contributors. The original tool is an excellent SPF/DMARC spoofability checker with manually tested spoof logic — we owe huge credit to that foundation. SpoofyVibe extends it with scoring, remediation, MTA-STS/MX/DKIM/DNSSEC analysis, M365 tenant discovery, async scanning, a web dashboard, and more. All of this was heavily **vibe coded** with AI assistance. The spaghetti has only gotten spicier. 🍝
 
 ---
 
@@ -31,7 +31,9 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 | BIMI record detection | ✅ | ✅ |
 | MTA-STS & TLS-RPT | ❌ | ✅ Full policy fetch + validation |
 | MX enumeration | ❌ | ✅ Provider ID, STARTTLS, PTR checks |
-| Security scoring | ❌ | ✅ 0-100 score, A+ to F grades, 7 categories |
+| DNSSEC detection | ❌ | ✅ DNSKEY + DS chain-of-trust verification |
+| M365 tenant discovery | ❌ | ✅ Tenant name extraction + `.onmicrosoft.com` domain enumeration |
+| Security scoring | ❌ | ✅ 0-100 score, A+ to F grades, 8 categories |
 | Remediation advice | ❌ | ✅ Prioritized recommendations per domain |
 | Interactive HTML report | ❌ | ✅ Glassmorphism dark-themed report |
 | Markdown report | ❌ | ✅ |
@@ -52,11 +54,13 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 - **MTA-STS** — TXT record, HTTPS policy fetch (`enforce`/`testing`/`none`), MX pattern validation
 - **TLS-RPT** — Reporting URI detection
 - **MX** — Full enumeration, 20+ provider identification (Google, Microsoft, Proofpoint, Mimecast, etc.), STARTTLS support check, reverse DNS (PTR) validation
+- **DNSSEC** — DNSKEY record detection, DS record chain-of-trust verification in parent zone
+- **M365 Tenant Discovery** — Automatic Microsoft 365 detection from MX records, tenant name extraction, `.onmicrosoft.com` domain enumeration
 - **Spoofability** — Real-world tested SPF+DMARC combination logic
 
 ### 📊 Intelligence
-- **Security Scoring** — 0–100 composite score across 7 weighted categories:
-  - SPF (20pts), DMARC (25pts), DKIM (15pts), BIMI (5pts), Spoof Resistance (15pts), MTA-STS (10pts), MX (10pts)
+- **Security Scoring** — 0–100 composite score across 8 weighted categories:
+  - SPF (18pts), DMARC (25pts), DKIM (15pts), BIMI (5pts), Spoof Resistance (15pts), MTA-STS (10pts), MX (7pts), DNSSEC (5pts)
 - **Letter Grades** — A+ through F with +/- modifiers
 - **Remediation Engine** — Prioritized recommendations (Critical → Info) with category tagging
 - **Scan History** — SQLite database with trend analysis, per-domain history, aggregate stats
@@ -120,6 +124,9 @@ python3 spoofy.py -iL domains.txt -o html
 # Scan with subdomain discovery
 python3 spoofy.py -d example.com --subdomains
 
+# Auto-scan M365 tenant domains discovered during scan
+python3 spoofy.py -d example.com --expand-tenant
+
 # Save results to history database
 python3 spoofy.py -iL domains.txt --save-history
 
@@ -157,6 +164,7 @@ Options:
     --no-remediation   Disable remediation advice
     --no-starttls   Skip STARTTLS checks on MX hosts
     --subdomains    Discover subdomains via CT logs before scanning
+    --expand-tenant Auto-scan discovered M365 tenant domains
     --save-history  Save results to local SQLite database
     --serve         Launch web dashboard and REST API
     --port          Web server port (default: 8080)
@@ -178,17 +186,18 @@ Options:
 
 ## Scoring System
 
-Each domain receives a score out of 100 across 7 categories:
+Each domain receives a score out of 100 across 8 categories:
 
 | Category | Max Points | What's Measured |
 |----------|-----------|-----------------|
-| SPF | 20 | Record exists, valid syntax, `-all`, DNS lookup count |
+| SPF | 18 | Record exists, valid syntax, `-all`, DNS lookup count |
 | DMARC | 25 | Record exists, `p=reject`, subdomain policy, `pct=100`, reporting |
 | DKIM | 15 | Selectors found, 2048+ bit keys |
 | BIMI | 5 | Record exists, VMC authority |
 | Spoof Resistance | 15 | Not spoofable (15), maybe (8), spoofable (0) |
 | MTA-STS | 10 | Policy exists, `enforce` mode, TLS-RPT |
-| MX | 10 | Records exist, STARTTLS, valid PTR, multiple MX |
+| MX | 7 | Records exist, STARTTLS, multiple MX |
+| DNSSEC | 5 | DNSKEY records present, DS chain of trust verified |
 
 Grades: **A+** (95+), **A** (90+), **B+** (85+), **B** (80+), **B-** (75+), **C+** (65+), **C** (55+), **C-** (45+), **D+** (35+), **D** (25+), **D-** (15+), **F** (<15)
 
@@ -213,7 +222,9 @@ SpoofyVibe/
 │   ├── bimi.py            # BIMI record detection
 │   ├── mta_sts.py         # MTA-STS + TLS-RPT analysis
 │   ├── mx.py              # MX enumeration + provider ID
-│   ├── scoring.py         # Security scoring engine
+│   ├── dnssec.py          # DNSSEC (DNSKEY + DS) detection
+│   ├── m365.py            # M365 tenant discovery
+│   ├── scoring.py         # Security scoring engine (8 categories)
 │   ├── remediation.py     # Remediation advice engine
 │   ├── history.py         # SQLite scan history
 │   ├── subdomain.py       # crt.sh subdomain discovery
@@ -225,6 +236,8 @@ SpoofyVibe/
 │   ├── test_remediation.py # Remediation engine tests (18)
 │   ├── test_mta_sts.py    # MTA-STS tests (14)
 │   ├── test_mx.py         # MX module tests (15)
+│   ├── test_dnssec.py     # DNSSEC module tests (14)
+│   ├── test_m365.py       # M365 tenant tests (16)
 │   ├── test_history.py    # History module tests (22)
 │   ├── test_subdomain.py  # Subdomain module tests (14)
 │   └── test_spoofy.py     # Original Spoofy logic tests (30)
@@ -235,13 +248,13 @@ SpoofyVibe/
 ## Tests
 
 ```bash
-# Run all 129 tests
+# Run all 159 tests
 python3 -m unittest discover -s . -p "test*.py" -v
 ```
 
 ## 🍝 Vibe Coded
 
-This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, async rewrite, web dashboard, history, subdomain discovery, the 99 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
+This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, DNSSEC, M365 tenant discovery, async rewrite, web dashboard, history, subdomain discovery, the 129 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
 
 ## Credits
 
