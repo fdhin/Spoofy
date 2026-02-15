@@ -225,18 +225,47 @@ class DKIM:
         return None
 
     def _resolve_dkim_via_cname(self, resolver, qname):
-        """Check if qname has a CNAME, follow it, and resolve TXT there."""
+        """Check if qname has a CNAME, follow it, and resolve TXT there.
+
+        When an authoritative NS returns a CNAME pointing to a different zone
+        (e.g. M365's .onmicrosoft.com), the auth NS can't resolve the target.
+        We fall back to a public recursive resolver (1.1.1.1) which can follow
+        the full CNAME chain across zones.
+        """
         try:
             cname_answers = resolver.resolve(qname, "CNAME")
             for rdata in cname_answers:
                 target = str(rdata).rstrip(".")
                 logger.debug("DKIM CNAME found: %s -> %s", qname, target)
+
+                # Try with current resolver first
                 txt_value = self._resolve_dkim_txt(resolver, target)
                 if txt_value:
+                    return txt_value
+
+                # Fall back to public recursive resolver for cross-zone CNAMEs
+                fallback = dns.resolver.Resolver()
+                fallback.nameservers = ["1.1.1.1"]
+                txt_value = self._resolve_dkim_txt(fallback, target)
+                if txt_value:
+                    logger.debug("Resolved DKIM TXT via fallback resolver for %s", target)
                     return txt_value
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
                 dns.resolver.NoNameservers, dns.resolver.Timeout):
             pass
+        except Exception:
+            pass
+
+        # Last resort: try the whole original qname via public resolver
+        # This handles cases where the auth NS returns NoAnswer for TXT
+        # but a recursive resolver can follow the CNAME chain automatically
+        try:
+            fallback = dns.resolver.Resolver()
+            fallback.nameservers = ["1.1.1.1"]
+            txt_value = self._resolve_dkim_txt(fallback, qname)
+            if txt_value:
+                logger.debug("Resolved DKIM TXT via fallback resolver for %s", qname)
+                return txt_value
         except Exception:
             pass
         return None
