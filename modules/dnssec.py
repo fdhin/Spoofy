@@ -72,11 +72,16 @@ class DNSSEC:
             self.error = str(e)
 
     def _check_ds(self):
-        """Query DS record in the parent zone to verify chain of trust."""
+        """Query DS record in the parent zone to verify chain of trust.
+
+        DS records live in the parent zone (e.g. .com), not the domain's own
+        zone. We must use a recursive resolver (not the domain's auth NS)
+        because the auth NS can only serve records for its own zone.
+        """
         resolver = dns.resolver.Resolver()
-        resolver.nameservers = [self.dns_server]
+        resolver.nameservers = ["1.1.1.1"]  # Always use recursive resolver for DS
         try:
-            logger.debug("Querying DS for %s", self.domain)
+            logger.debug("Querying DS for %s via recursive resolver", self.domain)
             answer = resolver.resolve(self.domain, "DS")
             if len(answer) > 0:
                 self.has_ds = True
