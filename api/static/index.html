@@ -617,6 +617,42 @@
             margin-top: 4px;
         }
 
+        /* --- Tooltips --- */
+        .tooltip {
+            position: relative;
+            cursor: help;
+            border-bottom: 1px dotted var(--text-secondary);
+        }
+
+        .tooltip::after {
+            content: attr(data-tip);
+            position: absolute;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%) translateY(10px);
+            background: var(--bg-card);
+            border: 1px solid var(--accent-blue);
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 0.75rem;
+            white-space: pre-wrap;
+            width: max-content;
+            max-width: 250px;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s ease;
+            box-shadow: var(--shadow-glow);
+            pointer-events: none;
+        }
+
+        .tooltip:hover::after {
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(-50%) translateY(0);
+        }
+
         /* --- History Tab --- */
         .history-header {
             display: flex;
@@ -1123,6 +1159,7 @@
                 { key: 'spoofability', label: 'Spoof Resistance', max: 15 },
                 { key: 'mta_sts', label: 'MTA-STS', max: 10 },
                 { key: 'mx', label: 'MX', max: 7 },
+                { key: 'caa', label: 'CAA', max: 5 },
                 { key: 'dnssec', label: 'DNSSEC', max: 5 },
             ];
 
@@ -1144,6 +1181,7 @@
                 { id: 'dmarc-' + domain, label: 'DMARC Details', content: renderDMARCDetails(r) },
                 { id: 'dkim-' + domain, label: 'DKIM Details', content: renderDKIMDetails(r) },
                 { id: 'mx-' + domain, label: 'MX Details', content: renderMXDetails(r) },
+                { id: 'caa-' + domain, label: 'CAA Details', content: renderCAADetails(r) },
                 { id: 'mtasts-' + domain, label: 'MTA-STS Details', content: renderMTASTSDetails(r) },
                 { id: 'dnssec-' + domain, label: 'DNSSEC Details', content: renderDNSSECDetails(r) },
                 { id: 'dane-' + domain, label: 'DANE Details', content: renderDANEDetails(r) },
@@ -1164,9 +1202,13 @@
                 remedHTML = '<div style="margin-top:16px">';
                 remedHTML += `<h4 style="color:var(--text-secondary);margin-bottom:8px;font-size:0.85rem">
             💡 Remediation (${recommendations.length} items)</h4>`;
-                topRecs.forEach(rec => {
+
+                const renderCard = (rec) => {
                     const pri = (rec.priority_label || 'info').toLowerCase();
-                    remedHTML += `
+                    const eli5 = rec.eli5_explanation ? `<div style="margin-top:8px; padding:10px; border-radius:6px; background:rgba(234, 179, 8, 0.05); font-size:0.8rem; border-left: 2px solid var(--accent-yellow)"><strong style="color:var(--accent-yellow)">ELI5:</strong> ${esc(rec.eli5_explanation)}</div>` : '';
+                    const risk = rec.business_risk ? `<div style="margin-top:4px; padding:10px; border-radius:6px; background:rgba(239, 68, 68, 0.05); font-size:0.8rem; border-left: 2px solid var(--accent-red)"><strong style="color:var(--accent-red)">Business Risk:</strong> ${esc(rec.business_risk)}</div>` : '';
+
+                    return `
                 <div class="remed-card remed-${pri}">
                     <div class="remed-header">
                         <span class="remed-priority pri-${pri}">${rec.priority_label || 'INFO'}</span>
@@ -1174,22 +1216,16 @@
                     </div>
                     <div class="remed-title">${esc(rec.title || '')}</div>
                     <div class="remed-desc">${esc(rec.description || '')}</div>
+                    ${eli5}
+                    ${risk}
                 </div>`;
-                });
+                };
+
+                topRecs.forEach(rec => { remedHTML += renderCard(rec); });
+
                 if (extraRecs.length > 0) {
                     remedHTML += `<div id="${remedId}" style="display:none">`;
-                    extraRecs.forEach(rec => {
-                        const pri = (rec.priority_label || 'info').toLowerCase();
-                        remedHTML += `
-                <div class="remed-card remed-${pri}">
-                    <div class="remed-header">
-                        <span class="remed-priority pri-${pri}">${rec.priority_label || 'INFO'}</span>
-                        <span class="remed-cat">${rec.category || ''}</span>
-                    </div>
-                    <div class="remed-title">${esc(rec.title || '')}</div>
-                    <div class="remed-desc">${esc(rec.description || '')}</div>
-                </div>`;
-                    });
+                    extraRecs.forEach(rec => { remedHTML += renderCard(rec); });
                     remedHTML += `</div>`;
                     remedHTML += `<button onclick="const el=document.getElementById('${remedId}');const show=el.style.display==='none';el.style.display=show?'block':'none';this.textContent=show?'▲ Show fewer':'▼ + ${extraRecs.length} more items'" style="display:block;margin:8px auto 0;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 16px;color:var(--accent-cyan);cursor:pointer;font-size:0.8rem;transition:all 0.2s">▼ + ${extraRecs.length} more items</button>`;
                 }
@@ -1209,28 +1245,47 @@
             </div>
             <div class="score-bars">${barsHTML}</div>
             ${renderM365Info(r)}
+            <div style="margin-bottom: 16px;">
+                <button class="details-toggle" onclick="showFlowDiagram('${esc(domain)}')" style="background:var(--gradient-card); border-color:var(--accent-purple); color:var(--text-primary);">
+                    📘 View Educational Email Flow
+                </button>
+            </div>
             <div>${detailBtns}</div>
             ${detailPanels}
             ${remedHTML}
         </div>`;
         }
 
+        function renderCAADetails(r) {
+            const records = r.CAA_RECORDS || [];
+            if (records.length === 0) return '<p style="color:var(--text-muted)">No CAA records found</p>';
+            let html = '<div style="display:flex;flex-direction:column;gap:4px">';
+            records.forEach(c => {
+                html += `<div class="detail-row">
+                    <span class="detail-key"><span class="tooltip" data-tip="Certificate Authority Authorization: Specifies which authorities can issue certificates for the domain.">${esc(c.tag)}</span></span>
+                    <span class="detail-val">${esc(c.value)}</span>
+                </div>`;
+            });
+            html += '</div>';
+            return html;
+        }
+
         function renderSPFDetails(r) {
             return detailRows([
-                ['SPF Record', r.SPF, true],
-                ['All Mechanism', r.SPF_MULTIPLE_ALLS],
-                ['DNS Lookups', r.SPF_NUM_DNS_QUERIES],
+                ['<span class="tooltip" data-tip="Sender Policy Framework: A list of authorized IP addresses allowed to send on your behalf.">SPF Record</span>', r.SPF, true],
+                ['<span class="tooltip" data-tip="The mechanism that tells receivers what to do when an email fails SPF formatting (-all is strict, ~all is soft).">All Mechanism</span>', r.SPF_MULTIPLE_ALLS],
+                ['<span class="tooltip" data-tip="SPF is limited to 10 DNS lookups to prevent denial-of-service.">DNS Lookups</span>', r.SPF_NUM_DNS_QUERIES],
                 ['Too Many Lookups', r.SPF_TOO_MANY_DNS_QUERIES ? '⚠️ Yes' : '✅ No'],
             ]);
         }
         function renderDMARCDetails(r) {
             return detailRows([
-                ['DMARC Record', r.DMARC, true],
-                ['Policy', r.DMARC_POLICY],
-                ['Subdomain Policy', r.DMARC_SP],
-                ['PCT', r.DMARC_PCT],
-                ['ASPF', r.DMARC_ASPF],
-                ['Aggregate Report (rua)', r.DMARC_AGGREGATE_REPORT, true],
+                ['<span class="tooltip" data-tip="Domain-based Message Authentication, Reporting, and Conformance. Dictates the policy on what happens to emails that fail checks.">DMARC Record</span>', r.DMARC, true],
+                ['<span class="tooltip" data-tip="The primary rule (none, quarantine, reject) applied to emails that fail DMARC.">Policy</span>', r.DMARC_POLICY],
+                ['<span class="tooltip" data-tip="The policy applied to emails sent from subdomains (e.g., mail.example.com).">Subdomain Policy</span>', r.DMARC_SP],
+                ['<span class="tooltip" data-tip="The percentage of messages subjected to filtering. Should be 100 for full protection.">PCT</span>', r.DMARC_PCT],
+                ['<span class="tooltip" data-tip="Alignment mode for SPF (strict or relaxed).">ASPF</span>', r.DMARC_ASPF],
+                ['<span class="tooltip" data-tip="The email address where aggregate XML reports are sent to monitor authentication.">Aggregate Report (rua)</span>', r.DMARC_AGGREGATE_REPORT, true],
             ]);
         }
         function renderDKIMDetails(r) {
@@ -1241,7 +1296,7 @@
                 const bits = s.key_bits || '?';
                 const weak = bits !== '?' && bits < 2048;
                 html += `<div style="display:flex;gap:12px;align-items:center">
-            <span style="color:var(--accent-cyan);font-weight:600;min-width:120px">${esc(s.selector)}</span>
+            <span class="tooltip" data-tip="A DKIM Selector is used to locate the public key in DNS to verify incoming email signatures." style="color:var(--accent-cyan);font-weight:600;min-width:120px">${esc(s.selector)}</span>
             <span style="color:${weak ? 'var(--accent-orange)' : 'var(--accent-green)'}">${bits}-bit</span>
             ${weak ? '<span class="badge badge-spoofable" style="font-size:0.65rem">WEAK</span>' : ''}
         </div>`;
@@ -1254,14 +1309,19 @@
             if (records.length === 0) return '<p style="color:var(--text-muted)">No MX records found</p>';
             let html = '';
             if (r.MX_PROVIDERS && r.MX_PROVIDERS.length > 0) {
-                html += `<div style="margin-bottom:10px;color:var(--text-secondary)">Providers: <strong style="color:var(--text-primary)">${r.MX_PROVIDERS.join(', ')}</strong></div>`;
+                html += `<div style="margin-bottom:10px;color:var(--text-secondary)"> Providers: <strong style="color:var(--text-primary)">${r.MX_PROVIDERS.join(', ')}</strong></div>`;
             }
             html += '<div style="display:flex;flex-direction:column;gap:4px">';
             records.forEach(mx => {
                 const tls = mx.starttls === true ? '🔒' : mx.starttls === false ? '⚠️' : '❓';
+                // if priority is 0 and host is empty, it's a Null MX
+                const isNull = mx.priority === 0 && mx.host === '';
+                const hostText = isNull ? '<span class="tooltip" data-tip="Null MX Record: Expressly states this domain sends/receives NO email.">Null MX (0 .)</span>' : esc(mx.host || '');
+                const ptrText = mx.ptr ? '<span class="tooltip" data-tip="Pointer Record: Resolves an IP address back to a hostname. Used to verify senders.">PTR</span>: ' + esc(mx.ptr) : '<span style="color:var(--accent-orange)">No PTR</span>';
+
                 html += `<div class="detail-row">
-            <span class="detail-key">${tls} ${esc(mx.host || '')}</span>
-            <span class="detail-val">${mx.ptr ? 'PTR: ' + esc(mx.ptr) : '<span style="color:var(--accent-orange)">No PTR</span>'}</span>
+            <span class="detail-key">${tls} ${hostText}</span>
+            <span class="detail-val">${isNull ? '' : ptrText}</span>
         </div>`;
             });
             html += '</div>';
@@ -1269,16 +1329,16 @@
         }
         function renderMTASTSDetails(r) {
             return detailRows([
-                ['MTA-STS TXT', r.MTA_STS_TXT, true],
+                ['<span class="tooltip" data-tip="Mail Transfer Agent Strict Transport Security: Forces encryption so attackers can\'t listen in.">MTA-STS TXT</span>', r.MTA_STS_TXT, true],
                 ['Policy Mode', r.MTA_STS_MODE],
                 ['Max Age', r.MTA_STS_MAX_AGE],
-                ['TLS-RPT Record', r.TLS_RPT_RECORD, true],
+                ['<span class="tooltip" data-tip="TLS Reporting: Instructs receivers where to send reports about TLS connection failures.">TLS-RPT Record</span>', r.TLS_RPT_RECORD, true],
                 ['TLS-RPT rua', r.TLS_RPT_RUA],
             ]);
         }
         function renderDNSSECDetails(r) {
             return detailRows([
-                ['DNSSEC Enabled', r.DNSSEC_ENABLED ? '✅ Yes' : '⚠️ No'],
+                ['<span class="tooltip" data-tip="Domain Name System Security Extensions: Protects against DNS spoofing by cryptographically signing records.">DNSSEC Enabled</span>', r.DNSSEC_ENABLED ? '✅ Yes' : '⚠️ No'],
                 ['DS Record (Chain of Trust)', r.DNSSEC_HAS_DS ? '✅ Verified' : '⚠️ Not found'],
                 ['DNSKEY Records', r.DNSSEC_KEY_COUNT || 0],
                 ['DS Algorithm', r.DNSSEC_DS_ALGORITHM || 'N/A'],
@@ -1290,7 +1350,7 @@
             const mx_count = r.DANE_MX_COUNT || 0;
             const total = r.DANE_TOTAL_MX || 0;
             let html = detailRows([
-                ['DANE/TLSA Status', has ? `✅ ${mx_count}/${total} MX hosts covered` : '⚠️ No TLSA records found'],
+                ['<span class="tooltip" data-tip="DNS-based Authentication of Named Entities: Cryptographic proof that the certificate matches the domain.">DANE/TLSA Status</span>', has ? `✅ ${mx_count}/${total} MX hosts covered` : '⚠️ No TLSA records found'],
             ]);
             if (records.length > 0) {
                 html += '<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">';
@@ -1512,6 +1572,43 @@
             document.getElementById('scan-domains').value = subs.join(', ');
             showTab('scan');
             startScan();
+        }
+
+        function showFlowDiagram(domain) {
+            const html = `
+                <div style="padding: 10px; font-size: 0.9rem;">
+                    <p style="margin-bottom: 20px; color: var(--text-secondary);">Here is the step-by-step security journey of an email arriving from ${domain}:</p>
+                    <div style="display:flex; flex-direction:column; gap: 16px;">
+                        <div style="background:var(--bg-input); padding: 16px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-purple)">
+                            <strong style="color:var(--accent-purple)">1. CAA Check (The Authority)</strong><br/>
+                            <p style="margin-top:8px; color:var(--text-secondary)">Before anything is sent, the sender\'s domain uses <span class="tooltip" data-tip="Certificate Authority Authorization: Specifies which authorities can issue certificates for the domain.">CAA</span> to dictate exactly which Certificate Authorities can issue TLS certificates for them, preventing rogue certificate creation.</p>
+                        </div>
+                        <div style="background:var(--bg-input); padding: 16px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-yellow)">
+                            <strong style="color:var(--accent-yellow)">2. SMTP Connection & TLS</strong><br/>
+                            <p style="margin-top:8px; color:var(--text-secondary)">The sending server connects. <span class="tooltip" data-tip="Mail Transfer Agent Strict Transport Security: Forces encryption so attackers can't listen in.">MTA-STS</span> ensures they must use TLS encryption, and <span class="tooltip" data-tip="DNS-based Authentication of Named Entities: Cryptographic proof that the certificate matches the domain.">DANE</span> checks the certificate against DNS records to ensure it isn't a forged Man-in-the-Middle certificate.</p>
+                        </div>
+                        <div style="background:var(--bg-input); padding: 16px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-orange)">
+                            <strong style="color:var(--accent-orange)">3. SPF Check (The Guest List)</strong><br/>
+                            <p style="margin-top:8px; color:var(--text-secondary)">The receiving server checks the <span class="tooltip" data-tip="Sender Policy Framework: A list of authorized IP addresses allowed to send on your behalf.">SPF</span> record. If the sender's IP is not on the list, it fails this test.</p>
+                        </div>
+                        <div style="background:var(--bg-input); padding: 16px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-green)">
+                            <strong style="color:var(--accent-green)">4. DKIM Check (The Wax Seal)</strong><br/>
+                            <p style="margin-top:8px; color:var(--text-secondary)">The server checks the <span class="tooltip" data-tip="DomainKeys Identified Mail: A cryptographic signature proving the email was not tampered with.">DKIM</span> signature against the public key in your DNS to verify the email's integrity.</p>
+                        </div>
+                        <div style="background:var(--bg-input); padding: 16px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-blue)">
+                            <strong style="color:var(--accent-blue)">5. DMARC Alignment (The Bouncer)</strong><br/>
+                            <p style="margin-top:8px; color:var(--text-secondary)"><span class="tooltip" data-tip="Domain-based Message Authentication, Reporting, and Conformance. Dictates the policy on what happens to emails that fail checks.">DMARC</span> checks if the 'From' address aligns with the SPF or DKIM passing domain. If it fails, DMARC tells the server to Reject it, Quarantine it, or do nothing.</p>
+                        </div>
+                        <div style="background:var(--bg-input); padding: 16px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-pink)">
+                            <strong style="color:var(--accent-pink)">6. BIMI (The Reward)</strong><br/>
+                            <p style="margin-top:8px; color:var(--text-secondary)">If DMARC passes and is strictly enforced, <span class="tooltip" data-tip="Brand Indicators for Message Identification: Verified sender logos.">BIMI</span> kicks in and displays your verified brand logo safely in the recipient's inbox.</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.getElementById('modal-title').textContent = 'Educational Email Flow for ' + domain;
+            document.getElementById('modal-body').innerHTML = html;
+            document.getElementById('modal-overlay').classList.add('open');
         }
 
         // --- Utilities ---

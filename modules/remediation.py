@@ -24,6 +24,8 @@ class Recommendation:
     impact: str
     fix: str  # Copy-pasteable DNS record or action
     reference: str  # RFC or documentation URL
+    eli5_explanation: str = ""
+    business_risk: str = ""
 
     PRIORITY_LABELS = {
         1: "🔴 CRITICAL",
@@ -47,6 +49,8 @@ class Recommendation:
             "impact": self.impact,
             "fix": self.fix,
             "reference": self.reference,
+            "eli5_explanation": self.eli5_explanation,
+            "business_risk": self.business_risk,
         }
 
 
@@ -62,6 +66,7 @@ class RemediationEngine:
         """
         self.result = result
         self.domain = result.get("DOMAIN", "example.com")
+        self.mx_providers = result.get("MX_PROVIDERS", [])
         self.recommendations = self._generate_recommendations()
 
     def _generate_recommendations(self):
@@ -74,6 +79,7 @@ class RemediationEngine:
         recs.extend(self._check_spoofability())
         recs.extend(self._check_mta_sts())
         recs.extend(self._check_mx())
+        recs.extend(self._check_caa())
         recs.extend(self._check_dnssec())
         recs.extend(self._check_dane())
         # Sort by priority (critical first)
@@ -112,6 +118,8 @@ class RemediationEngine:
                         "  • Proofpoint:     include:spf.proofpoint.com"
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7208",
+                    eli5_explanation="SPF is like a guest list for a party. Right now, you have no list, so the bouncer lets anyone in claiming to be you.",
+                    business_risk="Attackers can perfectly impersonate your CEO and ask finance to wire money to a fraudulent account.",
                 )
             )
             return recs
@@ -135,6 +143,8 @@ class RemediationEngine:
                         f'{self.domain}.  IN  TXT  "{spf.replace("+all", "-all")}"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7208#section-5.1",
+                    eli5_explanation="You actually put '+all' on your guest list, which literally translates to 'everyone is invited'. Anybody can send mail as you.",
+                    business_risk="Extreme impersonation risk. Scammers will use your domain to send spam and phishing emails, ruining your reputation.",
                 )
             )
 
@@ -248,6 +258,8 @@ class RemediationEngine:
                         f"  Current count: {query_count} (max allowed: 10)"
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7208#section-4.6.4",
+                    eli5_explanation="Your guest list is a list of other lists (vendors like Mailchimp). Mail servers like Gmail refuse to check more than 10 lists to verify a sender. You're over the limit.",
+                    business_risk="Legitimate emails from your actual employees and marketing tools may go straight to the recipient's spam folder entirely because of this technical error.",
                 )
             )
 
@@ -289,6 +301,8 @@ class RemediationEngine:
                         f'_dmarc.{self.domain}.  IN  TXT  "v=DMARC1; p=reject; rua=mailto:dmarc-reports@{self.domain}; pct=100"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7489",
+                    eli5_explanation="DMARC is the instructions you give to receiving mail servers on what to do when someone fakes your email. Without it, they guess, and they usually guess wrong.",
+                    business_risk="Without a DMARC policy, spoofed emails from your domain will directly land in your customers' inboxes.",
                 )
             )
             return recs
@@ -312,6 +326,8 @@ class RemediationEngine:
                         f'_dmarc.{self.domain}.  IN  TXT  "v=DMARC1; p=reject; rua=mailto:dmarc-reports@{self.domain}; pct=100"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7489#section-6.3",
+                    eli5_explanation="p=none is essentially saying: 'Please check if this email is fake. If it is fake... do nothing, let it through anyway.'",
+                    business_risk="Your brand is highly exposed to phishing attacks targeting your customers, as your policy 'none' does not ask providers to block bad actors.",
                 )
             )
 
@@ -451,12 +467,14 @@ class RemediationEngine:
                     ),
                     fix=(
                         "Configure DKIM signing on your email provider:\n\n"
-                        "  • Microsoft 365: Admin Center → Settings → Domains → Enable DKIM\n"
-                        "  • Google Workspace: Admin Console → Apps → Gmail → Authenticate email\n"
+                        "  • Microsoft 365: Microsoft 365 Defender Admin Center -> Email & Collaboration -> Policies & Rules -> Threat policies -> Email authentication settings -> DKIM -> Create DKIM keys\n"
+                        "  • Google Workspace: Admin Console -> Apps -> Google Workspace -> Gmail -> Authenticate email -> Generate New Record\n"
                         "  • Custom: Generate a 2048-bit RSA key pair and publish the public key:\n"
                         f'    selector._domainkey.{self.domain}.  IN  TXT  "v=DKIM1; k=rsa; p=<public_key>"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc6376",
+                    eli5_explanation="DKIM is a wax seal on your emails proving nobody tampered with them in transit. You have no wax seal.",
+                    business_risk="Without DKIM, forwarded emails or emails sent through third parties will fail DMARC alignment, dropping your legitimate email delivery rates.",
                 )
             )
 
@@ -727,7 +745,7 @@ class RemediationEngine:
             )
 
         if all_starttls is False:
-            no_tls = [mx.get("host", "?") for mx in mx_records if mx.get("starttls") is False]
+            no_tls = [mx.get("host", "?") for mx in mx_records if mx.get("starttls") in (False, None) and not mx.get("is_null_mx")]
             recs.append(
                 Recommendation(
                     priority=2,
@@ -747,7 +765,7 @@ class RemediationEngine:
             )
 
         if all_ptr is False:
-            no_ptr = [mx.get("host", "?") for mx in mx_records if mx.get("ptr") is None]
+            no_ptr = [mx.get("host", "?") for mx in mx_records if mx.get("ptr") is None and not mx.get("is_null_mx")]
             recs.append(
                 Recommendation(
                     priority=4,
@@ -878,6 +896,39 @@ class RemediationEngine:
                     "validated by DANE-aware MTAs."
                 ),
                 reference="https://www.huque.com/pages/dane-smtp.html",
+            ))
+
+        return recs
+
+    # --- CAA Checks ---
+
+    def _check_caa(self):
+        recs = []
+        caa_records = self.result.get("CAA_RECORDS", [])
+        
+        if not caa_records:
+            recs.append(Recommendation(
+                priority=4,
+                category="CAA",
+                title="No CAA records found",
+                description=(
+                    f"The domain {self.domain} does not have any CAA (Certificate Authority "
+                    "Authorization) records. CAA records specify which Certificate Authorities "
+                    "(CAs) are allowed to issue SSL/TLS certificates for your domain."
+                ),
+                impact=(
+                    "Without a CAA record, any CA worldwide is permitted to issue a certificate "
+                    "for your domain if an attacker fraudulently passes domain validation. This "
+                    "can facilitate man-in-the-middle attacks."
+                ),
+                fix=(
+                    f'{self.domain}.  IN  CAA  0 issue "letsencrypt.org"\n'
+                    f'{self.domain}.  IN  CAA  0 issuewild ";"\n'
+                    "Restrict issuance to only the specific CAs your organization uses."
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc8659",
+                eli5_explanation="CAA tells the internet exactly which companies are allowed to make 'ID cards' (certificates) for your website. Without it, anyone could trick a careless company into making a fake ID for your site.",
+                business_risk="Attackers could exploit a weaker Certificate Authority to generate a valid certificate for your domain, enabling perfect phishing sites or intercepting secure traffic."
             ))
 
         return recs

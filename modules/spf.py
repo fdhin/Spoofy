@@ -15,11 +15,21 @@ class SPF:
         self.all_mechanism = None
         self.spf_dns_query_count = 0
         self.too_many_dns_queries = False
+        self.spf_macros = []
 
         if self.spf_record:
             self.all_mechanism = self.get_spf_all_string()
             self.spf_dns_query_count = self.get_spf_dns_queries()
             self.too_many_dns_queries = self.spf_dns_query_count > 10
+            self.spf_macros = self.get_spf_macros()
+
+    def get_spf_macros(self):
+        """Returns a list of SPF macros used in the record."""
+        if not self.spf_record:
+            return []
+        # Find all macros like %{i}, %{s}, %{d}, etc.
+        macros = re.findall(r"%{[a-zA-Z][0-9r]*[.-]*}", self.spf_record)
+        return list(set(macros))
 
     def get_spf_record(self, domain=None):
         """Fetches the SPF record for the specified domain."""

@@ -20,6 +20,7 @@ class TestMX(unittest.TestCase):
         obj.providers = providers or set()
         obj.all_starttls = None
         obj.has_ptr = None
+        obj.has_null_mx = False
         # Compute all_starttls and has_ptr from records
         if obj.records:
             tls_vals = [mx.starttls for mx in obj.records if mx.starttls is not None]

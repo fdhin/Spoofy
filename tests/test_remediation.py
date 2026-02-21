@@ -160,6 +160,18 @@ class TestRemediationEngine(unittest.TestCase):
         rua_recs = [r for r in engine.recommendations if "rua" in r.title.lower() or "aggregate" in r.title.lower()]
         self.assertTrue(len(rua_recs) > 0)
 
+    # --- CAA Issues ---
+
+    def test_no_caa_generates_recommendation(self):
+        """Missing CAA should generate a recommendation."""
+        result = self._make_result(CAA_RECORDS=[])
+        engine = RemediationEngine(result)
+        caa_recs = [r for r in engine.recommendations if r.category == "CAA"]
+        self.assertTrue(len(caa_recs) > 0)
+        self.assertIn("CAA", caa_recs[0].title)
+        self.assertNotEqual(caa_recs[0].eli5_explanation, "")
+        self.assertNotEqual(caa_recs[0].business_risk, "")
+
     # --- Perfect Config ---
 
     def test_perfect_config_minimal_recommendations(self):
@@ -261,6 +273,22 @@ class TestRecommendation(unittest.TestCase):
         self.assertEqual(d["priority"], 2)
         self.assertEqual(d["category"], "DMARC")
         self.assertEqual(d["title"], "Test Title")
+
+    def test_eli_and_business_risk_fields(self):
+        rec = Recommendation(
+            priority=2,
+            category="SPF",
+            title="Test",
+            description="Desc",
+            impact="Impact",
+            fix="Fix",
+            reference="url",
+            eli5_explanation="eli5",
+            business_risk="risk"
+        )
+        d = rec.to_dict()
+        self.assertEqual(d["eli5_explanation"], "eli5")
+        self.assertEqual(d["business_risk"], "risk")
 
 
 if __name__ == "__main__":

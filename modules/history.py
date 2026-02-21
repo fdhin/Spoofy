@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("spoofyvibe.history")
 
@@ -130,7 +130,7 @@ class ScanHistory:
         else:
             spoofable_int = -1
 
-        timestamp = datetime.utcnow().isoformat() + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         conn = self._get_conn()
         try:
@@ -176,7 +176,7 @@ class ScanHistory:
                 spoofable = result.get("SPOOFING_POSSIBLE")
                 breakdown = result.get("SCORE_BREAKDOWN", {})
                 spoofable_int = 1 if spoofable is True else (0 if spoofable is False else -1)
-                timestamp = datetime.utcnow().isoformat() + "Z"
+                timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
                 cursor = conn.execute(
                     """INSERT INTO scans

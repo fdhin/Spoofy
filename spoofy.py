@@ -13,6 +13,7 @@ from modules.mx import MX
 from modules.mta_sts import MTASTS
 from modules.dnssec import DNSSEC
 from modules.m365 import M365Tenant
+from modules.caa import CAA
 from modules.dane import DANE
 from modules.spoofing import Spoofing
 from modules.scoring import SecurityScore
@@ -41,9 +42,10 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
     mx_future = loop.run_in_executor(None, lambda: MX(domain, server, check_starttls=check_starttls))
     mta_sts_future = loop.run_in_executor(None, MTASTS, domain, server)
     dnssec_future = loop.run_in_executor(None, DNSSEC, domain, server)
+    caa_future = loop.run_in_executor(None, CAA, domain, server)
 
-    spf, dmarc, bimi_info, mx_info, mta_sts, dnssec_info = await asyncio.gather(
-        spf_future, dmarc_future, bimi_future, mx_future, mta_sts_future, dnssec_future
+    spf, dmarc, bimi_info, mx_info, mta_sts, dnssec_info, caa_info = await asyncio.gather(
+        spf_future, dmarc_future, bimi_future, mx_future, mta_sts_future, dnssec_future, caa_future
     )
 
     # M365 tenant detection (uses MX results, so runs after MX)
@@ -95,6 +97,8 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
         "BIMI_AUTHORITY": bimi_info.authority,
         "SPOOFING_POSSIBLE": spoofing_info.spoofing_possible,
         "SPOOFING_TYPE": spoofing_info.spoofing_type,
+        "SPF_MACROS": spf.spf_macros,
+        "DMARC_HAS_WILDCARD_DNS": dmarc.has_wildcard_dns,
     }
 
     # Add DKIM data
@@ -109,6 +113,9 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
 
     # Add DNSSEC data
     result.update(dnssec_info.to_dict())
+
+    # Add CAA data
+    result.update(caa_info.to_dict())
 
     # Add M365 data
     result.update(m365_info.to_dict())

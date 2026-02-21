@@ -4,10 +4,11 @@
 Weighted scoring engine for email security posture.
 
 Computes a 0-100 score and A+→F letter grade per domain based on:
-  - SPF configuration (18 pts)
-  - DMARC configuration (25 pts)
+  - SPF configuration (16 pts)
+  - DMARC configuration (22 pts)
   - DKIM presence & key strength (15 pts)
   - BIMI presence (5 pts)
+  - CAA configuration (5 pts)
   - Spoofability verdict (15 pts)
   - MTA-STS & TLS-RPT (10 pts)
   - MX infrastructure (7 pts)
@@ -54,27 +55,29 @@ class SecurityScore:
         dmarc_score = self._score_dmarc()
         dkim_score = self._score_dkim()
         bimi_score = self._score_bimi()
+        caa_score = self._score_caa()
         spoof_score = self._score_spoofability()
         mta_sts_score = self._score_mta_sts()
         mx_score = self._score_mx()
         dnssec_score = self._score_dnssec()
 
         self.breakdown = {
-            "spf": {"score": spf_score, "max": 18, "details": self._spf_details()},
-            "dmarc": {"score": dmarc_score, "max": 25, "details": self._dmarc_details()},
+            "spf": {"score": spf_score, "max": 16, "details": self._spf_details()},
+            "dmarc": {"score": dmarc_score, "max": 22, "details": self._dmarc_details()},
             "dkim": {"score": dkim_score, "max": 15, "details": self._dkim_details()},
             "bimi": {"score": bimi_score, "max": 5, "details": self._bimi_details()},
+            "caa": {"score": caa_score, "max": 5, "details": self._caa_details()},
             "spoofability": {"score": spoof_score, "max": 15, "details": self._spoof_details()},
             "mta_sts": {"score": mta_sts_score, "max": 10, "details": self._mta_sts_details()},
             "mx": {"score": mx_score, "max": 7, "details": self._mx_details()},
             "dnssec": {"score": dnssec_score, "max": 5, "details": self._dnssec_details()},
         }
 
-        return (spf_score + dmarc_score + dkim_score + bimi_score
+        return (spf_score + dmarc_score + dkim_score + bimi_score + caa_score
                 + spoof_score + mta_sts_score + mx_score + dnssec_score)
 
     def _score_spf(self):
-        """Score SPF configuration (0-18 points)."""
+        """Score SPF configuration (0-16 points)."""
         score = 0
         spf = self.result.get("SPF")
         spf_all = self.result.get("SPF_MULTIPLE_ALLS")
@@ -90,9 +93,9 @@ class SecurityScore:
         if spf.strip().lower().startswith("v=spf1"):
             score += 3
 
-        # Strong all mechanism: -all (+8), ~all (+4), ?all (+1), +all (0)
+        # Strong all mechanism: -all (+6), ~all (+4), ?all (+1), +all (0)
         if spf_all == "-all":
-            score += 8
+            score += 6
         elif spf_all == "~all":
             score += 4
         elif spf_all == "?all":
@@ -102,16 +105,17 @@ class SecurityScore:
         if not too_many:
             score += 2
 
-        return min(score, 18)
+        return min(score, 16)
 
     def _score_dmarc(self):
-        """Score DMARC configuration (0-25 points)."""
+        """Score DMARC configuration (0-22 points)."""
         score = 0
         dmarc = self.result.get("DMARC")
         policy = self.result.get("DMARC_POLICY")
         pct = self.result.get("DMARC_PCT")
         rua = self.result.get("DMARC_AGGREGATE_REPORT")
         sp = self.result.get("DMARC_SP")
+        wildcard_dns = self.result.get("DMARC_HAS_WILDCARD_DNS", False)
 
         if not dmarc:
             return 0
@@ -123,22 +127,17 @@ class SecurityScore:
         if "DMARC1" in str(dmarc):
             score += 2
 
-        # Policy strength: reject (+10), quarantine (+7), none (+2)
+        # Policy strength: reject (+8), quarantine (+5), none (+1)
         if policy == "reject":
-            score += 10
+            score += 8
         elif policy == "quarantine":
-            score += 7
+            score += 5
         elif policy == "none":
-            score += 2
+            score += 1
 
-        # Percentage = 100 or not set (defaults to 100) (+3)
+        # Percentage = 100 or not set (defaults to 100) (+2)
         if pct is None or str(pct).strip() == "100":
-            score += 3
-        elif pct:
-            try:
-                score += int(int(pct) * 3 / 100)
-            except (ValueError, TypeError):
-                pass
+            score += 2
 
         # Aggregate reporting configured (+4)
         if rua:
@@ -150,7 +149,11 @@ class SecurityScore:
         elif sp == "none":
             score += 1
 
-        return min(score, 25)
+        # Penalty for wildcard DNS Subdomain Hijacking
+        if wildcard_dns and (sp != "reject" and policy != "reject"):
+            score -= 5
+
+        return max(0, min(score, 22))
 
     def _score_dkim(self):
         """Score DKIM configuration (0-15 points)."""
@@ -204,6 +207,21 @@ class SecurityScore:
 
         return min(score, 5)
 
+    def _score_caa(self):
+        """Score CAA configuration (0-5 points)."""
+        caa = self.result.get("CAA_RECORDS", [])
+        has_issue = self.result.get("CAA_HAS_ISSUE", False)
+        
+        if not caa:
+            return 0
+            
+        score = 2 # Exists
+        
+        if has_issue:
+            score += 3
+            
+        return min(score, 5)
+
     def _score_spoofability(self):
         """Score based on spoofability verdict (0-15 points)."""
         spoofable = self.result.get("SPOOFING_POSSIBLE")
@@ -244,9 +262,13 @@ class SecurityScore:
         mx_records = self.result.get("MX_RECORDS", [])
         mx_count = self.result.get("MX_COUNT", 0)
         all_starttls = self.result.get("MX_ALL_STARTTLS")
+        has_null_mx = self.result.get("MX_HAS_NULL_MX", False)
 
         if mx_count == 0:
             return 0
+
+        if has_null_mx:
+            return 7 # Full points for defensive configuration
 
         # MX records exist (+2)
         score += 2
@@ -325,6 +347,10 @@ class SecurityScore:
             details.append(("❌", "Too many DNS lookups (>10)"))
         else:
             details.append(("✅", "DNS lookup count within limit"))
+            
+        macros = self.result.get("SPF_MACROS", [])
+        if macros:
+            details.append(("ℹ️", f"SPF uses advanced macros: {', '.join(macros)}"))
 
         return details
 
@@ -373,6 +399,13 @@ class SecurityScore:
                 details.append(("⚠️", f"Subdomain policy: {sp}"))
         else:
             details.append(("⚠️", "No subdomain policy (sp=) — inherits p= value"))
+            
+        wildcard_dns = self.result.get("DMARC_HAS_WILDCARD_DNS", False)
+        if wildcard_dns:
+            if sp != "reject" and policy != "reject":
+                details.append(("❗️", "Wildcard DNS detected without reject policy. High risk of subdomain spoofing!"))
+            else:
+                details.append(("✅", "Wildcard DNS detected, but protected by reject policy."))
 
         return details
 
@@ -428,6 +461,25 @@ class SecurityScore:
             details.append(("✅", f"VMC authority: {authority}"))
         else:
             details.append(("ℹ️", "No VMC certificate (authority) specified"))
+
+        return details
+
+    def _caa_details(self):
+        """Return detail items for CAA scoring."""
+        details = []
+        caa = self.result.get("CAA_RECORDS", [])
+        has_issue = self.result.get("CAA_HAS_ISSUE", False)
+
+        if not caa:
+            details.append(("⚠️", "No CAA record found"))
+            return details
+
+        details.append(("✅", "CAA record exists"))
+
+        if has_issue:
+            details.append(("✅", "CAA restricts issuance to specific authorities"))
+        else:
+            details.append(("⚠️", "CAA does not explicitly restrict certificate issuance"))
 
         return details
 
@@ -514,13 +566,16 @@ class SecurityScore:
             details.append(("✅", "All MX hosts support STARTTLS"))
         elif all_starttls is False:
             details.append(("❌", "Not all MX hosts support STARTTLS"))
-        else:
+        elif not self.result.get("MX_HAS_NULL_MX"):
             details.append(("ℹ️", "STARTTLS status could not be fully determined"))
 
         if all_ptr is True:
-            details.append(("✅", "All MX hosts have valid PTR records"))
+            details.append(("✅", "All MX hosts have valid PTR records (FCrDNS pass)"))
         elif all_ptr is False:
-            details.append(("⚠️", "Not all MX hosts have valid PTR records"))
+            details.append(("⚠️", "Not all MX hosts have valid PTR records (FCrDNS fail)"))
+            
+        if self.result.get("MX_HAS_NULL_MX"):
+            details.append(("✅", "Null MX configuration detected — domain intentionally receives no email"))
 
         return details
 

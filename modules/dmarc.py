@@ -18,6 +18,7 @@ class DMARC:
         self.sp = None
         self.fo = None
         self.rua = None
+        self.has_wildcard_dns = self.check_wildcard_dns()
 
         if self.dmarc_record:
             self.policy = self.get_dmarc_policy()
@@ -102,6 +103,27 @@ class DMARC:
             return str(self.dmarc_record).split("rua=")[1].split(";")[0].strip()
         return None
 
+    def check_wildcard_dns(self):
+        """Checks if wildcard DNS is enabled by querying a random subdomain."""
+        import random
+        import string
+        rand_str = ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
+        subdomain = f"spoofyvibe-wildcard-{rand_str}.{self.domain}"
+        
+        resolver = dns.resolver.Resolver()
+        if self.dns_server:
+            resolver.nameservers = [self.dns_server]
+            
+        try:
+            resolver.resolve(subdomain, "A")
+            return True
+        except Exception:
+            try:
+                resolver.resolve(subdomain, "CNAME")
+                return True
+            except Exception:
+                return False
+
     def __str__(self):
         return (
             f"DMARC Record: {self.dmarc_record}\n"
@@ -110,5 +132,6 @@ class DMARC:
             f"ASPF: {self.aspf}\n"
             f"Subdomain Policy: {self.sp}\n"
             f"Forensic Report URI: {self.fo}\n"
-            f"Aggregate Report URI: {self.rua}"
+            f"Aggregate Report URI: {self.rua}\n"
+            f"Has Wildcard DNS: {self.has_wildcard_dns}"
         )

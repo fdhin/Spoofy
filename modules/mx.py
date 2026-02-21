@@ -67,6 +67,8 @@ class MXRecord:
         self.starttls = None
         self.ptr_record = None
         self.ip_address = None
+        self.fcrdns = None
+        self.is_null_mx = (self.priority == 0 and self.host == "")
 
     def to_dict(self):
         return {
@@ -76,6 +78,8 @@ class MXRecord:
             "starttls": self.starttls,
             "ptr": self.ptr_record,
             "ip": self.ip_address,
+            "fcrdns": self.fcrdns,
+            "is_null_mx": self.is_null_mx,
         }
 
 
@@ -89,6 +93,7 @@ class MX:
         self.providers = set()
         self.all_starttls = None
         self.has_ptr = None
+        self.has_null_mx = False
 
         self._query_mx()
         self._identify_providers()
@@ -106,6 +111,8 @@ class MX:
             answers = resolver.resolve(self.domain, "MX")
             for rdata in answers:
                 mx = MXRecord(rdata.preference, str(rdata.exchange))
+                if mx.is_null_mx:
+                    self.has_null_mx = True
                 self.records.append(mx)
             # Sort by priority (lowest first)
             self.records.sort(key=lambda r: r.priority)
@@ -137,6 +144,9 @@ class MX:
         """Test STARTTLS support on each MX host (port 25)."""
         all_ok = True
         for mx in self.records:
+            if mx.is_null_mx:
+                mx.starttls = None
+                continue
             try:
                 # Resolve the MX hostname
                 mx.ip_address = socket.gethostbyname(mx.host)
@@ -181,6 +191,10 @@ class MX:
         """Check reverse DNS (PTR) for each MX host."""
         all_ptr = True
         for mx in self.records:
+            if mx.is_null_mx:
+                mx.ptr_record = None
+                mx.fcrdns = None
+                continue
             if not mx.ip_address:
                 try:
                     mx.ip_address = socket.gethostbyname(mx.host)
@@ -193,13 +207,26 @@ class MX:
                 result = socket.gethostbyaddr(mx.ip_address)
                 mx.ptr_record = result[0]
                 logger.debug("PTR for %s (%s): %s", mx.host, mx.ip_address, mx.ptr_record)
+                
+                # Forward-Confirmed reverse DNS (FCrDNS) check
+                try:
+                    forward_ip = socket.gethostbyname(mx.ptr_record)
+                    mx.fcrdns = (forward_ip == mx.ip_address)
+                    if not mx.fcrdns:
+                        logger.debug("FCrDNS failed for %s: %s resolved to %s instead of %s", mx.host, mx.ptr_record, forward_ip, mx.ip_address)
+                except (socket.herror, socket.gaierror):
+                    mx.fcrdns = False
+                    logger.debug("FCrDNS failed for %s: could not resolve PTR %s", mx.host, mx.ptr_record)
+                    
             except (socket.herror, socket.gaierror):
                 logger.debug("No PTR for %s (%s)", mx.host, mx.ip_address)
                 mx.ptr_record = None
+                mx.fcrdns = False
                 all_ptr = False
             except Exception as e:
                 logger.error("PTR check error for %s: %s", mx.host, e)
                 mx.ptr_record = None
+                mx.fcrdns = False
                 all_ptr = False
 
         self.has_ptr = all_ptr if self.records else None
@@ -216,6 +243,7 @@ class MX:
             "MX_PROVIDERS": list(self.providers),
             "MX_ALL_STARTTLS": self.all_starttls,
             "MX_ALL_PTR": self.has_ptr,
+            "MX_HAS_NULL_MX": self.has_null_mx,
         }
 
     def provider_summary(self):

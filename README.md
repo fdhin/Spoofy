@@ -30,17 +30,18 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 | Spoofability detection | ✅ | ✅ (same battle-tested logic) |
 | BIMI record detection | ✅ | ✅ |
 | MTA-STS & TLS-RPT | ❌ | ✅ Full policy fetch + validation |
-| MX enumeration | ❌ | ✅ Provider ID, STARTTLS, PTR checks |
+| MX enumeration | ❌ | ✅ Provider ID, STARTTLS, PTR checks, Null MX detection |
+| CAA record detection | ❌ | ✅ Validates Certificate Authority issuance restrictions |
 | DNSSEC detection | ❌ | ✅ DNSKEY + DS chain-of-trust verification |
 | DANE / TLSA | ❌ | ✅ Per-MX-host TLSA record detection + parsing |
 | M365 tenant discovery | ❌ | ✅ Tenant name extraction + `.onmicrosoft.com` domain enumeration |
-| Security scoring | ❌ | ✅ 0-100 score, A+ to F grades, 8 categories |
-| Remediation advice | ❌ | ✅ Prioritized recommendations per domain |
-| Interactive HTML report | ❌ | ✅ Glassmorphism dark-themed report |
-| PDF Executive Report | ❌ | ✅ Boardroom-ready, dark-branded PDF |
+| Security scoring | ❌ | ✅ 0-100 score, A+ to F grades, 9 categories |
+| Remediation advice | ❌ | ✅ Prioritized recommendations with ELI5 explanations and Business Risks |
+| Interactive HTML report | ❌ | ✅ Glassmorphism dark-themed report with Educational Verification Flow |
+| PDF Executive Report | ❌ | ✅ Boardroom-ready, dark-branded PDF with Business Risk summaries |
 | Markdown report | ❌ | ✅ |
 | Async I/O | Threads | Full `asyncio` with configurable concurrency |
-| Web dashboard | ❌ | ✅ FastAPI + SPA dashboard |
+| Web dashboard | ❌ | ✅ FastAPI + SPA dashboard with interactive tooltips |
 | REST API | ❌ | ✅ 7 endpoints |
 | Scan history | ❌ | ✅ SQLite with trends + stats |
 | Subdomain discovery | ❌ | ✅ Certificate Transparency (crt.sh) |
@@ -49,37 +50,39 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 
 ### 🏗️ Core Analysis
 - **Authoritative DNS lookups** with Cloudflare fallback (inherited from Spoofy)
-- **SPF** — Record parsing, `all` mechanism analysis, DNS query counter (10-lookup limit)
-- **DMARC** — Policy detection (`none`/`quarantine`/`reject`), subdomain policy, reporting URIs
+- **SPF** — Record parsing, `all` mechanism analysis, DNS query counter, **macro detection (`%{i}`, etc.)**
+- **DMARC** — Policy detection (`none`/`quarantine`/`reject`), subdomain policy, reporting URIs, **wildcard DNS hijacking exposure**
 - **DKIM** — API lookup + DNS brute-force across 40+ common selectors, RSA key strength analysis (flags weak 1024-bit keys)
 - **BIMI** — Brand indicator record and VMC authority detection
+- **CAA** — Certificate Authority restricts parsing and missing record validation
 - **MTA-STS** — TXT record, HTTPS policy fetch (`enforce`/`testing`/`none`), MX pattern validation
 - **TLS-RPT** — Reporting URI detection
-- **MX** — Full enumeration, 20+ provider identification (Google, Microsoft, Proofpoint, Mimecast, etc.), STARTTLS support check, reverse DNS (PTR) validation
+- **MX** — Full enumeration, 20+ provider identification (Google, Microsoft, Proofpoint, Mimecast, etc.), STARTTLS support check, reverse DNS (PTR/FCrDNS) validation, **Null MX** detection
 - **DNSSEC** — DNSKEY record detection, DS record chain-of-trust verification in parent zone
 - **DANE** — TLSA record detection per MX host (`_25._tcp.<mx-host>`), usage/selector/matching-type parsing
 - **M365 Tenant Discovery** — Automatic Microsoft 365 detection from MX records, tenant name extraction, `.onmicrosoft.com` domain enumeration
 - **Spoofability** — Real-world tested SPF+DMARC combination logic
 
 ### 📊 Intelligence
-- **Security Scoring** — 0–100 composite score across 8 weighted categories:
-  - SPF (18pts), DMARC (25pts), DKIM (15pts), BIMI (5pts), Spoof Resistance (15pts), MTA-STS (10pts), MX (7pts), DNSSEC (5pts)
+- **Security Scoring** — 0–100 composite score across 9 weighted categories:
+  - SPF (16pts), DMARC (22pts), DKIM (15pts), BIMI (5pts), CAA (5pts), Spoof Resistance (15pts), MTA-STS (10pts), MX (7pts), DNSSEC (5pts)
 - **Letter Grades** — A+ through F with +/- modifiers
-- **Remediation Engine** — Prioritized recommendations (Critical → Info) with category tagging
+- **ELI5 Remediation Engine** — Prioritized recommendations (Critical → Info) with category tagging, **Explain-Like-I'm-5 layperson translations**, **Business Risk summaries**, and provider-specific guided fixes (e.g. detailed setup paths for M365).
 - **Scan History** — SQLite database with trend analysis, per-domain history, aggregate stats
 - **Subdomain Discovery** — Certificate Transparency log queries via crt.sh
 
 ### 🌐 Web Platform
-- **Web Dashboard** — Dark-themed single-page app with scan, history, and subdomain tabs
+- **Educational Web Dashboard** — Dark-themed single-page app with interactive tooltips defining technical acronyms (DMARC, DANE, MTA-STS).
 - **REST API** — FastAPI-powered with auto-generated docs at `/docs`
 - **Score Visualizations** — Animated score bars, trend charts, grade badges
-- **Remediation Cards** — Color-coded by severity with expandable protocol details
+- **Remediation Cards** — Color-coded by severity, integrating ELI5 translations and Business Risk context visually.
+- **Interactive Flow Diagram** — Generates a timeline-based "Educational Email Flow" visual map demonstrating the exact lifecycle of an inbound secure email specific to the queried domain.
 - **Bulk Operations** — Scan up to 50 domains concurrently via API
 
 ### 📄 Output Formats
 - `stdout` — Color-coded terminal table
 - `html` — Interactive dark-themed HTML report with executive summary
-- `pdf` — Branded executive PDF (cover page, score gauges, remediations)
+- `pdf` — Branded executive PDF containing overall grades, domain metric scores, and a structured **Business Risk & Educational Summary** page targeting boardroom stakeholders.
 - `json` — Machine-readable JSON
 - `csv` — Spreadsheet-compatible CSV
 - `xls` — Excel workbook via openpyxl
@@ -199,10 +202,11 @@ Each domain receives a score out of 100 across 8 categories:
 
 | Category | Max Points | What's Measured |
 |----------|-----------|-----------------|
-| SPF | 18 | Record exists, valid syntax, `-all`, DNS lookup count |
-| DMARC | 25 | Record exists, `p=reject`, subdomain policy, `pct=100`, reporting |
+| SPF | 16 | Record exists, valid syntax, `-all`, DNS lookup count |
+| DMARC | 22 | Record exists, `p=reject`, subdomain policy, `pct=100`, reporting |
 | DKIM | 15 | Selectors found, 2048+ bit keys |
 | BIMI | 5 | Record exists, VMC authority |
+| CAA | 5 | Record exists, restricts certificate issuance |
 | Spoof Resistance | 15 | Not spoofable (15), maybe (8), spoofable (0) |
 | MTA-STS | 10 | Policy exists, `enforce` mode, TLS-RPT |
 | MX | 7 | Records exist, STARTTLS, multiple MX |
@@ -260,13 +264,13 @@ SpoofyVibe/
 ## Tests
 
 ```bash
-# Run all 177 tests
-python3 -m unittest discover -s . -p "test*.py" -v
+# Run all 151 tests
+python3 -m unittest discover -s tests -p "test*.py" -v
 ```
 
 ## 🍝 Vibe Coded
 
-This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, remediation, MTA-STS, MX analysis, DNSSEC, DANE, M365 tenant discovery, PDF executive reports, async rewrite, web dashboard, history, subdomain discovery, the 147 additional tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
+This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, ELI5 remediation, MTA-STS, MX analysis, DNSSEC, DANE, CAA, M365 tenant discovery, boardroom PDF reports, async rewrite, web dashboard, history, subdomain discovery, the 151 tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
 
 ## Credits
 

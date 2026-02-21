@@ -80,6 +80,7 @@ CATEGORY_LABELS = [
     ("spoofability", "Spoofability", 15),
     ("mta_sts", "MTA-STS", 10),
     ("mx", "MX", 10),
+    ("caa", "CAA", 5),
     ("dnssec", "DNSSEC", 5),
 ]
 
@@ -374,6 +375,83 @@ def generate_pdf_report(results, filename="spoofyvibe_report.pdf"):
 
     pdf.set_y(y + 4)
 
+    # ── Page 3: Business Risk & Educational Summary ──────────────────────
+
+    # Collect unique business risks by priority
+    risk_summary = {}
+    for r in results:
+        domain = r.get("DOMAIN", "unknown")
+        for rec in r.get("RECOMMENDATIONS", []):
+            risk = rec.get("business_risk", "")
+            if not risk:
+                continue
+            title = rec.get("title", "")
+            pri = rec.get("priority", 5)
+            if title not in risk_summary:
+                risk_summary[title] = {
+                    "priority": pri,
+                    "risk": risk,
+                    "domains": {domain}
+                }
+            else:
+                risk_summary[title]["domains"].add(domain)
+                if pri < risk_summary[title]["priority"]:
+                    risk_summary[title]["priority"] = pri
+
+    # Only create page if there are business risks
+    if risk_summary:
+        pdf.add_page()
+        pdf.set_fill_color(*DARK_BG)
+        pdf.rect(0, 0, 210, 297, "F")
+
+        pdf._section_title("Business Risk & Educational Summary")
+
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(*TEXT_SECONDARY)
+        intro_text = "This section provides an executive overview of the business risks identified during the scan, explained in plain language. Technical findings have been translated into real-world impact to help prioritize remediation efforts."
+        pdf.multi_cell(180, 5, _safe(intro_text), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(8)
+
+        # Sort by priority
+        sorted_risks = sorted(risk_summary.values(), key=lambda x: x["priority"])
+
+        for risk_item in sorted_risks:
+            pri = risk_item["priority"]
+            pri_label = PRIORITY_LABELS.get(pri, "INFO")
+            pri_color = PRIORITY_COLORS.get(pri, PRIORITY_COLORS[5])
+            
+            if pdf.get_y() > 250:
+                pdf.add_page()
+                pdf.set_fill_color(*DARK_BG)
+                pdf.rect(0, 0, 210, 297, "F")
+                pdf._section_title("Business Risk Summary (continued)")
+
+            y_start = pdf.get_y()
+            
+            # Colored bar indicator
+            pdf.set_fill_color(*pri_color)
+            pdf.rect(15, y_start, 2, 8, "F")
+
+            # Title / Domains
+            pdf.set_xy(20, y_start)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(*TEXT_PRIMARY)
+            
+            domains_list = list(risk_item["domains"])
+            dom_str = ", ".join(domains_list[:3])
+            if len(domains_list) > 3:
+                dom_str += f" (+{len(domains_list)-3} more)"
+                
+            pdf.cell(0, 5, _safe(f"[{pri_label}]  Impact on: {dom_str}"), new_x="LMARGIN", new_y="NEXT")
+
+            # Risk text
+            pdf.set_xy(20, pdf.get_y() + 1)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(*TEXT_SECONDARY)
+            pdf.multi_cell(175, 5.5, _safe(risk_item["risk"]), new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(6)
+
+
     # ── Per-domain score breakdowns ──────────────────────────────────────
 
     pdf._section_title("Domain Score Breakdown")
@@ -552,6 +630,28 @@ def generate_pdf_report(results, filename="spoofyvibe_report.pdf"):
                 pdf.set_text_color(*TEXT_SECONDARY)
                 pdf.multi_cell(180, 4.5, _safe(desc), new_x="LMARGIN", new_y="NEXT")
 
+            eli5 = rec.get("eli5_explanation", "")
+            if eli5:
+                pdf.ln(1)
+                pdf.set_font("Helvetica", "B", 8)
+                pdf.set_text_color(234, 179, 8)  # Yellow
+                pdf.write(4.5, "ELI5: ")
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(*TEXT_SECONDARY)
+                pdf.write(4.5, _safe(eli5))
+                pdf.ln(5)
+
+            risk = rec.get("business_risk", "")
+            if risk:
+                pdf.ln(1)
+                pdf.set_font("Helvetica", "B", 8)
+                pdf.set_text_color(239, 68, 68)  # Red
+                pdf.write(4.5, "Business Risk: ")
+                pdf.set_font("Helvetica", "", 8)
+                pdf.set_text_color(*TEXT_SECONDARY)
+                pdf.write(4.5, _safe(risk))
+                pdf.ln(5)
+
             # Fix
             if fix:
                 pdf.set_font("Helvetica", "I", 8)
@@ -600,6 +700,14 @@ def _extract_details(result):
     # BIMI
     bimi = result.get("BIMI")
     details.append(("BIMI", bimi if bimi else "Not found"))
+
+    # CAA
+    caa_records = result.get("CAA_RECORDS", [])
+    if caa_records:
+        caa_list = [c.get("tag", "?") + "=" + c.get("value", "?") for c in caa_records]
+        details.append(("CAA", ", ".join(caa_list)))
+    else:
+        details.append(("CAA", "Not found"))
 
     # MTA-STS
     mta_mode = result.get("MTASTS_MODE")
