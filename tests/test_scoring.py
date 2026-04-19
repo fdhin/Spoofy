@@ -92,7 +92,9 @@ class TestSecurityScore(unittest.TestCase):
             CAA_RECORDS=[{"tag": "issue", "value": "letsencrypt.org"}],
             CAA_HAS_ISSUE=True,
             DNSSEC_ENABLED=True,
+            DNSSEC_DNSKEY_PRESENT=True,
             DNSSEC_HAS_DS=True,
+            DNSSEC_AD_FLAG=True,
             DNSSEC_KEY_COUNT=3,
         )
         score = SecurityScore(result)
@@ -198,6 +200,8 @@ class TestSecurityScore(unittest.TestCase):
         score = SecurityScore(result)
         d = score.to_dict()
         self.assertIn("SECURITY_SCORE", d)
+        self.assertIn("SECURITY_SCORE_MAX", d)
+        self.assertIn("SECURITY_SCORE_PCT", d)
         self.assertIn("SECURITY_GRADE", d)
         self.assertIn("SCORE_BREAKDOWN", d)
         self.assertIn("SCORE_DETAILS", d)

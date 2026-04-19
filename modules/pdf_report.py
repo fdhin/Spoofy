@@ -73,13 +73,13 @@ PRIORITY_COLORS = {
 PRIORITY_LABELS = {1: "CRITICAL", 2: "HIGH", 3: "MEDIUM", 4: "LOW", 5: "INFO"}
 
 CATEGORY_LABELS = [
-    ("spf", "SPF", 20),
-    ("dmarc", "DMARC", 20),
+    ("spf", "SPF", 16),
+    ("dmarc", "DMARC", 22),
     ("dkim", "DKIM", 15),
     ("bimi", "BIMI", 5),
     ("spoofability", "Spoofability", 15),
     ("mta_sts", "MTA-STS", 10),
-    ("mx", "MX", 10),
+    ("mx", "MX", 7),
     ("caa", "CAA", 5),
     ("dnssec", "DNSSEC", 5),
 ]
@@ -496,7 +496,7 @@ def generate_pdf_report(results, filename="spoofyvibe_report.pdf"):
             pdf.set_text_color(239, 68, 68)
         elif spoofable is False:
             spoof_txt = "  |  Not Spoofable"
-        pdf.cell(80, 5, _safe(f"Score: {score}/100{spoof_txt}"))
+        pdf.cell(80, 5, _safe(f"Score: {score}/{result.get('SECURITY_SCORE_MAX', 100)}{spoof_txt}"))
 
         # Score bars
         bar_y = y + 16
@@ -673,14 +673,16 @@ def _extract_details(result):
     # SPF
     spf = result.get("SPF")
     if spf:
-        details.append(("SPF Record", spf[:200]))
+        display = spf[:200] + ("..." if len(spf) > 200 else "")
+        details.append(("SPF Record", display))
     else:
         details.append(("SPF Record", "Not found"))
 
     # DMARC
     dmarc = result.get("DMARC")
     if dmarc:
-        details.append(("DMARC Record", dmarc[:200]))
+        display = dmarc[:200] + ("..." if len(dmarc) > 200 else "")
+        details.append(("DMARC Record", display))
     else:
         details.append(("DMARC Record", "Not found"))
 
@@ -698,7 +700,7 @@ def _extract_details(result):
         details.append(("DKIM", "No selectors found"))
 
     # BIMI
-    bimi = result.get("BIMI")
+    bimi = result.get("BIMI_RECORD")
     details.append(("BIMI", bimi if bimi else "Not found"))
 
     # CAA
@@ -710,7 +712,7 @@ def _extract_details(result):
         details.append(("CAA", "Not found"))
 
     # MTA-STS
-    mta_mode = result.get("MTASTS_MODE")
+    mta_mode = result.get("MTA_STS_MODE")
     details.append(("MTA-STS", mta_mode if mta_mode else "Not configured"))
 
     # MX
@@ -738,7 +740,8 @@ def _extract_details(result):
 
     # M365
     if result.get("M365_DETECTED"):
-        tenant = result.get("M365_TENANT_NAME", "Unknown")
-        details.append(("Microsoft 365", f"Tenant: {tenant}"))
+        tenant = result.get("M365_TENANT_NAME") or result.get("M365_MX_PREFIX", "Unknown")
+        label = "Tenant" if result.get("M365_TENANT_NAME") else "MX Prefix"
+        details.append(("Microsoft 365", f"{label}: {tenant}"))
 
     return details

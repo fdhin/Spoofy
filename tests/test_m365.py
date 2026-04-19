@@ -67,17 +67,26 @@ class TestM365Tenant(unittest.TestCase):
 
     # --- Tenant name extraction ---
 
-    def test_tenant_name_extracted(self):
-        """Should extract tenant name from MX host."""
+    def test_mx_prefix_extracted(self):
+        """Should extract MX hostname prefix from MX host."""
         mx = [{"host": "contoso-com.mail.protection.outlook.com"}]
         m365 = self._make_m365(mx_records=mx)
-        self.assertEqual(m365.tenant_name, "contoso-com")
+        self.assertEqual(m365.mx_prefix, "contoso-com")
+        # tenant_name is None because DKIM CNAME mock returns NXDOMAIN
+        self.assertIsNone(m365.tenant_name)
 
-    def test_tenant_name_complex(self):
-        """Should extract tenant name with hyphens."""
+    def test_mx_prefix_complex(self):
+        """Should extract MX prefix with hyphens."""
         mx = [{"host": "my-company-org.mail.protection.outlook.com"}]
         m365 = self._make_m365(mx_records=mx)
-        self.assertEqual(m365.tenant_name, "my-company-org")
+        self.assertEqual(m365.mx_prefix, "my-company-org")
+
+    def test_gcc_high_detected(self):
+        """Should detect M365 GCC High from office365.us MX pattern."""
+        mx = [{"host": "contoso-com.mail.protection.office365.us"}]
+        m365 = self._make_m365(mx_records=mx)
+        self.assertTrue(m365.is_m365)
+        self.assertEqual(m365.mx_prefix, "contoso-com")
 
     # --- Tenant domain discovery ---
 
@@ -115,7 +124,9 @@ class TestM365Tenant(unittest.TestCase):
         m365 = self._make_m365(mx_records=mx, resolve_domains=resolving)
         d = m365.to_dict()
         self.assertTrue(d["M365_DETECTED"])
-        self.assertEqual(d["M365_TENANT_NAME"], "contoso-com")
+        self.assertEqual(d["M365_MX_PREFIX"], "contoso-com")
+        # tenant_name is None in mock (no DKIM CNAME)
+        self.assertIsNone(d["M365_TENANT_NAME"])
         self.assertIsInstance(d["M365_TENANT_DOMAINS"], list)
 
     def test_to_dict_not_detected(self):
@@ -123,6 +134,7 @@ class TestM365Tenant(unittest.TestCase):
         m365 = self._make_m365(mx_records=[])
         d = m365.to_dict()
         self.assertFalse(d["M365_DETECTED"])
+        self.assertIsNone(d["M365_MX_PREFIX"])
         self.assertIsNone(d["M365_TENANT_NAME"])
         self.assertEqual(d["M365_TENANT_DOMAINS"], [])
 

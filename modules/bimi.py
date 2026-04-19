@@ -1,6 +1,11 @@
 # modules/bimi.py
 
 import dns.resolver
+import logging
+
+from .txt_utils import parse_txt_record, parse_tag_value
+
+logger = logging.getLogger("spoofyvibe.bimi")
 
 
 class BIMI:
@@ -13,9 +18,10 @@ class BIMI:
         self.authority = None
 
         if self.bimi_record:
-            self.version = self.get_bimi_version()
-            self.location = self.get_bimi_location()
-            self.authority = self.get_bimi_authority()
+            tags = parse_tag_value(self.bimi_record)
+            self.version = tags.get("v")
+            self.location = tags.get("l")
+            self.authority = tags.get("a")
 
     def get_bimi_record(self):
         """Returns the BIMI record for the domain."""
@@ -24,30 +30,13 @@ class BIMI:
             if self.dns_server:
                 resolver.nameservers = [self.dns_server]
             bimi = resolver.resolve(f"default._bimi.{self.domain}", "TXT")
-            for record in bimi:
-                if "v=BIMI" in str(record):
+            for rdata in bimi:
+                record = parse_txt_record(rdata)
+                if record.startswith("v=BIMI"):
                     return record
             return None
         except Exception:
             return None
-
-    def get_bimi_version(self):
-        """Returns the version value from a BIMI record."""
-        if "v=" in str(self.bimi_record):
-            return str(self.bimi_record).split("v=")[1].split(";")[0]
-        return None
-
-    def get_bimi_location(self):
-        """Returns the location value from a BIMI record."""
-        if "l=" in str(self.bimi_record):
-            return str(self.bimi_record).split("l=")[1].split(";")[0]
-        return None
-
-    def get_bimi_authority(self):
-        """Returns the authority value from a BIMI record."""
-        if "a=" in str(self.bimi_record):
-            return str(self.bimi_record).split("a=")[1].split(";")[0]
-        return None
 
     def get_bimi_details(self):
         """Returns a tuple containing version, location, and authority from a BIMI record."""

@@ -26,6 +26,12 @@ class TestDNSSEC(unittest.TestCase):
                 if ds_exc:
                     raise ds_exc
                 return ds_answer or []
+            elif rdtype == "SOA":
+                # AD flag check — return a mock response with no AD flag
+                mock_answer = MagicMock()
+                mock_answer.response = MagicMock()
+                mock_answer.response.flags = 0  # No AD flag
+                return mock_answer
             raise dns.resolver.NoAnswer()
 
         with patch("modules.dnssec.dns.resolver.Resolver") as MockResolver:
@@ -48,17 +54,30 @@ class TestDNSSEC(unittest.TestCase):
 
     # --- DNSKEY tests ---
 
-    def test_enabled_when_dnskey_exists(self):
-        """DNSSEC should be enabled when DNSKEY records are found."""
-        answer = self._make_answer(count=3)
-        dnssec = self._make_dnssec(dnskey_answer=answer)
+    def test_enabled_when_dnskey_and_ds_exist(self):
+        """DNSSEC should be enabled only when BOTH DNSKEY and DS exist."""
+        dnskey = self._make_answer(count=3)
+        ds = self._make_answer(count=1, algorithm=13)
+        dnssec = self._make_dnssec(dnskey_answer=dnskey, ds_answer=ds)
         self.assertTrue(dnssec.enabled)
+        self.assertTrue(dnssec.dnskey_present)
+        self.assertTrue(dnssec.has_ds)
         self.assertEqual(dnssec.dnskey_count, 3)
+
+    def test_not_enabled_when_dnskey_only(self):
+        """DNSKEY without DS is broken DNSSEC — enabled should be False."""
+        dnskey = self._make_answer(count=3)
+        dnssec = self._make_dnssec(dnskey_answer=dnskey,
+                                    ds_exc=dns.resolver.NoAnswer())
+        self.assertFalse(dnssec.enabled)
+        self.assertTrue(dnssec.dnskey_present)
+        self.assertFalse(dnssec.has_ds)
 
     def test_disabled_when_no_dnskey(self):
         """DNSSEC should be disabled when no DNSKEY records."""
         dnssec = self._make_dnssec(dnskey_exc=dns.resolver.NoAnswer())
         self.assertFalse(dnssec.enabled)
+        self.assertFalse(dnssec.dnskey_present)
         self.assertEqual(dnssec.dnskey_count, 0)
 
     def test_disabled_on_nxdomain(self):
@@ -95,16 +114,18 @@ class TestDNSSEC(unittest.TestCase):
         dnskey = self._make_answer(count=2)
         dnssec = self._make_dnssec(dnskey_answer=dnskey,
                                     ds_exc=dns.resolver.NoAnswer())
-        self.assertTrue(dnssec.enabled)
+        self.assertFalse(dnssec.enabled)  # DNSKEY without DS = broken
+        self.assertTrue(dnssec.dnskey_present)
         self.assertFalse(dnssec.has_ds)
 
     def test_ds_timeout_not_fatal(self):
-        """DS query timeout should not affect enabled status."""
+        """DS query timeout should not crash. enabled=False since no DS confirmed."""
         dnskey = self._make_answer(count=2)
         dnssec = self._make_dnssec(dnskey_answer=dnskey,
                                     ds_exc=dns.resolver.Timeout())
-        self.assertTrue(dnssec.enabled)
-        self.assertFalse(dnssec.has_ds)  # Just not confirmed
+        self.assertFalse(dnssec.enabled)  # Can't confirm chain of trust
+        self.assertTrue(dnssec.dnskey_present)
+        self.assertFalse(dnssec.has_ds)
 
     # --- to_dict ---
 
@@ -131,21 +152,21 @@ class TestDNSSEC(unittest.TestCase):
     # --- __str__ ---
 
     def test_str_enabled(self):
-        """String representation when enabled."""
+        """String representation when enabled (DNSKEY + DS)."""
         dnskey = self._make_answer(count=2)
         ds = self._make_answer(count=1)
         dnssec = self._make_dnssec(dnskey_answer=dnskey, ds_answer=ds)
         s = str(dnssec)
         self.assertIn("Enabled", s)
-        self.assertIn("chain of trust verified", s)
+        self.assertIn("DS verified", s)
 
-    def test_str_enabled_no_ds(self):
-        """String representation when enabled but no DS."""
+    def test_str_broken(self):
+        """String representation when DNSKEY exists but no DS (broken)."""
         dnskey = self._make_answer(count=1)
         dnssec = self._make_dnssec(dnskey_answer=dnskey,
                                     ds_exc=dns.resolver.NoAnswer())
         s = str(dnssec)
-        self.assertIn("Enabled", s)
+        self.assertIn("Broken", s)
         self.assertIn("no DS", s)
 
     def test_str_disabled(self):

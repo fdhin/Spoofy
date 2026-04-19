@@ -47,15 +47,18 @@ class TestSubdomainFinder(unittest.TestCase):
         self.assertFalse(finder._is_valid_subdomain(""))
 
     def test_invalid_chars_rejected(self):
-        """Names with invalid characters should be rejected."""
+        """Names with spaces should be rejected (underscores are valid for _dmarc etc)."""
         finder = SubdomainFinder("example.com")
         self.assertFalse(finder._is_valid_subdomain("sub domain.example.com"))
-        self.assertFalse(finder._is_valid_subdomain("sub_domain.example.com"))
+        # Underscores are now accepted for _dmarc, _mta-sts, etc.
+        self.assertTrue(finder._is_valid_subdomain("_dmarc.example.com"))
+        self.assertTrue(finder._is_valid_subdomain("sub_domain.example.com"))
 
     # --- Discovery Tests ---
 
+    @patch("modules.subdomain.time.sleep")
     @patch("modules.subdomain.requests.get")
-    def test_discover_parses_crt_sh_response(self, mock_get):
+    def test_discover_parses_crt_sh_response(self, mock_get, mock_sleep):
         """discover() should parse crt.sh JSON and return unique subdomains."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -79,8 +82,9 @@ class TestSubdomainFinder(unittest.TestCase):
         # Result should be sorted
         self.assertEqual(result, sorted(result))
 
+    @patch("modules.subdomain.time.sleep")
     @patch("modules.subdomain.requests.get")
-    def test_discover_deduplicates(self, mock_get):
+    def test_discover_deduplicates(self, mock_get, mock_sleep):
         """Duplicate subdomains should be deduplicated."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -96,18 +100,22 @@ class TestSubdomainFinder(unittest.TestCase):
         mail_count = result.count("mail.example.com")
         self.assertEqual(mail_count, 1)
 
+    @patch("modules.subdomain.time.sleep")  # Don't actually sleep in tests
     @patch("modules.subdomain.requests.get")
-    def test_discover_http_error(self, mock_get):
-        """Non-200 response should return base domain and set error."""
+    def test_discover_http_429_retries(self, mock_get, mock_sleep):
+        """429 should retry with backoff, then return base domain."""
         mock_resp = MagicMock()
         mock_resp.status_code = 429
         mock_get.return_value = mock_resp
 
         finder = SubdomainFinder("example.com")
         result = finder.discover()
-        self.assertEqual(result, [])
+        # After max retries, returns base domain
+        self.assertIn("example.com", result)
         self.assertIsNotNone(finder.error)
-        self.assertIn("429", finder.error)
+        self.assertIn("rate limited", finder.error.lower())
+        # Should have retried (4 total calls: initial + 3 retries)
+        self.assertEqual(mock_get.call_count, 4)
 
     @patch("modules.subdomain.requests.get")
     def test_discover_timeout(self, mock_get):

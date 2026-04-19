@@ -150,6 +150,7 @@ def _build_domain_card(result):
         "spoofability": "Spoof Resistance",
         "mta_sts": "MTA-STS & TLS-RPT",
         "mx": "MX Infrastructure",
+        "caa": "CAA",
         "dnssec": "DNSSEC",
     }
     for cat_key, cat_label in category_labels.items():
@@ -216,6 +217,10 @@ def _build_domain_card(result):
         <div class="record-value"><code>{_esc(result.get('DMARC_AGGREGATE_REPORT'))}</code></div>
       </div>
       <div class="record-item">
+        <div class="record-label">DMARC Forensic Reports</div>
+        <div class="record-value"><code>{_esc(result.get('DMARC_FORENSIC_REPORT'))}</code></div>
+      </div>
+      <div class="record-item">
         <div class="record-label">DKIM</div>
         <div class="record-value"><code>{_esc(result.get('DKIM'))}</code></div>
       </div>
@@ -228,8 +233,16 @@ def _build_domain_card(result):
         <div class="record-value"><code>{_esc(result.get('MTA_STS_MODE'))}</code></div>
       </div>
       <div class="record-item">
+        <div class="record-label">MTA-STS Max Age</div>
+        <div class="record-value">{_esc(result.get('MTA_STS_MAX_AGE') or 'N/A')}</div>
+      </div>
+      <div class="record-item">
         <div class="record-label">TLS-RPT</div>
         <div class="record-value"><code>{_esc(result.get('TLS_RPT_RECORD'))}</code></div>
+      </div>
+      <div class="record-item">
+        <div class="record-label">CAA Records</div>
+        <div class="record-value">{_esc(', '.join(c.get('tag','') + '=' + c.get('value','') for c in result.get('CAA_RECORDS', [])) or 'Not found')}</div>
       </div>
       <div class="record-item">
         <div class="record-label">MX Records ({mx_count})</div>
@@ -241,7 +254,7 @@ def _build_domain_card(result):
       </div>
       <div class="record-item">
         <div class="record-label">Microsoft 365</div>
-        <div class="record-value">{'☁️ Detected — Tenant: ' + _esc(result.get('M365_TENANT_NAME', '')) if result.get('M365_DETECTED') else 'Not detected'}</div>
+        <div class="record-value">{'☁️ Detected — ' + ('Tenant: ' + _esc(result.get('M365_TENANT_NAME', '')) if result.get('M365_TENANT_NAME') else 'MX Prefix: ' + _esc(result.get('M365_MX_PREFIX', ''))) if result.get('M365_DETECTED') else 'Not detected'}</div>
       </div>
       <div class="record-item">
         <div class="record-label">DANE / TLSA</div>
@@ -276,7 +289,7 @@ def _build_domain_card(result):
       <div class="card-title">
         <h2>{_esc(domain)}</h2>
         <div class="card-meta">
-          Score: {score}/100 &nbsp;•&nbsp; {spoof_badge}
+          Score: {score}/{result.get('SECURITY_SCORE_MAX', 100)} &nbsp;•&nbsp; {spoof_badge}
           &nbsp;•&nbsp; Type: {_esc(result.get('DOMAIN_TYPE', 'domain'))}
         </div>
       </div>
@@ -345,16 +358,31 @@ def generate_html_report(results, filename="output.html"):
     domain_cards = "\n".join(_build_domain_card(r) for r in results)
 
     # Compute an overall average grade
-    if avg_score >= 95:
+    # Use the same grade boundaries as SecurityScore for consistency
+    if avg_score >= 97:
         avg_grade = "A+"
-    elif avg_score >= 90:
+    elif avg_score >= 93:
         avg_grade = "A"
-    elif avg_score >= 80:
+    elif avg_score >= 90:
+        avg_grade = "A-"
+    elif avg_score >= 87:
+        avg_grade = "B+"
+    elif avg_score >= 83:
         avg_grade = "B"
-    elif avg_score >= 70:
+    elif avg_score >= 80:
+        avg_grade = "B-"
+    elif avg_score >= 77:
+        avg_grade = "C+"
+    elif avg_score >= 73:
         avg_grade = "C"
-    elif avg_score >= 60:
+    elif avg_score >= 70:
+        avg_grade = "C-"
+    elif avg_score >= 67:
+        avg_grade = "D+"
+    elif avg_score >= 63:
         avg_grade = "D"
+    elif avg_score >= 60:
+        avg_grade = "D-"
     else:
         avg_grade = "F"
 

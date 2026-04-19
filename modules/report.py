@@ -74,7 +74,7 @@ def write_to_markdown(data, file_name="output.md"):
         else:
             spoof_str = "❌ Spoofable"
 
-        lines.append(f"## {domain} — Grade: {grade} ({score}/100)")
+        lines.append(f"## {domain} — Grade: {grade} ({score}/{result.get('SECURITY_SCORE_MAX', 100)})")
         lines.append("")
         lines.append(f"**Spoofability:** {spoof_str}")
         lines.append("")
@@ -84,8 +84,15 @@ def write_to_markdown(data, file_name="output.md"):
         lines.append("|-------|-------|")
         for key in ["SPF", "SPF_MULTIPLE_ALLS", "SPF_NUM_DNS_QUERIES",
                      "DMARC", "DMARC_POLICY", "DMARC_PCT", "DMARC_ASPF",
-                     "DMARC_SP", "DMARC_AGGREGATE_REPORT", "DKIM",
-                     "BIMI_RECORD", "DNS_SERVER"]:
+                     "DMARC_SP", "DMARC_AGGREGATE_REPORT", "DMARC_FORENSIC_REPORT",
+                     "DKIM", "BIMI_RECORD",
+                     "MTA_STS_MODE", "MTA_STS_MAX_AGE", "TLS_RPT_RECORD",
+                     "MX_COUNT", "MX_ALL_STARTTLS",
+                     "DNSSEC_ENABLED", "DNSSEC_HAS_DS",
+                     "DANE_HAS_TLSA",
+                     "CAA_ISSUE", "CAA_ISSUEWILD",
+                     "M365_DETECTED", "M365_TENANT_NAME", "M365_MX_PREFIX",
+                     "DNS_SERVER"]:
             val = result.get(key)
             val_str = str(val) if val is not None else "N/A"
             # Escape pipes in values
@@ -118,19 +125,7 @@ def write_to_markdown(data, file_name="output.md"):
 
 def output_json(results):
     """Output results as JSON to stdout."""
-    output = []
-    for result in results:
-        # Create a JSON-serializable copy
-        clean = {}
-        for k, v in result.items():
-            if k in ("SCORE_DETAILS", "SCORE_BREAKDOWN"):
-                clean[k] = v
-            elif k == "RECOMMENDATIONS":
-                clean[k] = v
-            else:
-                clean[k] = v
-        output.append(clean)
-    print(json.dumps(output, indent=2, default=str))
+    print(json.dumps(results, indent=2, default=str))
 
 
 def _flatten_results(data):
@@ -251,6 +246,43 @@ def printer(**kwargs):
         output_message("[*]", f"BIMI version: {vbimi}", "info")
         output_message("[*]", f"BIMI location: {location}", "info")
         output_message("[*]", f"BIMI authority: {authority}", "info")
+
+    # MTA-STS / TLS-RPT
+    mta_sts_mode = kwargs.get("MTA_STS_MODE")
+    tls_rpt = kwargs.get("TLS_RPT_RECORD")
+    if mta_sts_mode:
+        output_message("[*]", f"MTA-STS mode: {mta_sts_mode}", "info")
+    else:
+        output_message("[?]", "No MTA-STS policy configured.", "warning")
+    if tls_rpt:
+        output_message("[*]", f"TLS-RPT: {tls_rpt}", "info")
+
+    # DNSSEC
+    dnssec_enabled = kwargs.get("DNSSEC_ENABLED", False)
+    dnssec_ds = kwargs.get("DNSSEC_HAS_DS", False)
+    if dnssec_enabled:
+        ds_str = " (DS verified)" if dnssec_ds else ""
+        output_message("[+]", f"DNSSEC enabled{ds_str}", "good")
+    else:
+        output_message("[?]", "DNSSEC not enabled.", "warning")
+
+    # DANE
+    dane_has_tlsa = kwargs.get("DANE_HAS_TLSA", False)
+    if dane_has_tlsa:
+        output_message("[+]", f"DANE: {kwargs.get('DANE_MX_COUNT', 0)}/{kwargs.get('DANE_TOTAL_MX', 0)} MX hosts have TLSA records", "good")
+
+    # CAA
+    caa_issue = kwargs.get("CAA_ISSUE")
+    if caa_issue:
+        output_message("[*]", f"CAA issue: {caa_issue}", "info")
+    else:
+        output_message("[?]", "No CAA records found.", "warning")
+
+    # MX
+    mx_count = kwargs.get("MX_COUNT", 0)
+    mx_providers = kwargs.get("MX_PROVIDERS", [])
+    if mx_count > 0:
+        output_message("[*]", f"MX: {mx_count} record(s) — {', '.join(mx_providers) if mx_providers else 'Unknown'}", "info")
 
     if spoofing_type:
         level = "good" if spoofable else "bad"

@@ -86,6 +86,25 @@ class RemediationEngine:
         recs.sort(key=lambda r: r.priority)
         return recs
 
+    def _normalize_spf_all(self, spf_record, old_all, new_all):
+        """Replace an 'all' mechanism in an SPF record, handling bare 'all'.
+
+        Per RFC 7208, bare 'all' is implicitly '+all'. If the raw record
+        contains bare 'all' (no qualifier), normalize it before replacing.
+        """
+        if not spf_record:
+            return spf_record
+        # Tokenize, normalize bare 'all' to '+all', then replace
+        tokens = spf_record.split()
+        normalized = []
+        for token in tokens:
+            if token == "all":
+                normalized.append("+all")
+            else:
+                normalized.append(token)
+        result = " ".join(normalized)
+        return result.replace(old_all, new_all)
+
     # --- SPF Checks ---
 
     def _check_spf(self):
@@ -140,7 +159,7 @@ class RemediationEngine:
                     ),
                     fix=(
                         "Change '+all' to '-all' in your SPF record:\n\n"
-                        f'{self.domain}.  IN  TXT  "{spf.replace("+all", "-all")}"'
+                        f'{self.domain}.  IN  TXT  "{self._normalize_spf_all(spf, "+all", "-all")}"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7208#section-5.1",
                     eli5_explanation="You actually put '+all' on your guest list, which literally translates to 'everyone is invited'. Anybody can send mail as you.",
@@ -164,7 +183,7 @@ class RemediationEngine:
                     ),
                     fix=(
                         "Change '?all' to '-all' (or '~all' as an intermediate step):\n\n"
-                        f'{self.domain}.  IN  TXT  "{spf.replace("?all", "-all")}"'
+                        f'{self.domain}.  IN  TXT  "{self._normalize_spf_all(spf, "?all", "-all")}"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7208#section-5.1",
                 )
@@ -186,7 +205,7 @@ class RemediationEngine:
                     ),
                     fix=(
                         "When you're confident your SPF includes are complete, change '~all' to '-all':\n\n"
-                        f'{self.domain}.  IN  TXT  "{spf.replace("~all", "-all")}"'
+                        f'{self.domain}.  IN  TXT  "{self._normalize_spf_all(spf, "~all", "-all")}"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7208#section-5.1",
                 )
@@ -367,8 +386,8 @@ class RemediationEngine:
                         "subject to your DMARC policy."
                     ),
                     fix=(
-                        "Increase pct to 100 when you're confident in your configuration:\n\n"
-                        "Change 'pct={pct}' to 'pct=100' in your DMARC record."
+                        f"Increase pct to 100 when you're confident in your configuration:\n\n"
+                        f"Change 'pct={pct}' to 'pct=100' in your DMARC record."
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7489#section-6.3",
                 )
@@ -431,7 +450,7 @@ class RemediationEngine:
                         "This creates a gap attackers can exploit."
                     ),
                     impact=(
-                        "Attackers can spoof subdomains (e.g., mail.{self.domain}, support.{self.domain}) "
+                        f"Attackers can spoof subdomains (e.g., mail.{self.domain}, support.{self.domain}) "
                         "because the subdomain policy allows it."
                     ),
                     fix=(
@@ -450,6 +469,11 @@ class RemediationEngine:
         dkim = self.result.get("DKIM")
         selectors = self.result.get("DKIM_SELECTORS", [])
         has_weak = self.result.get("DKIM_HAS_WEAK_KEYS", False)
+        dkim_scanned = self.result.get("DKIM_SCANNED", True)
+
+        if not dkim_scanned:
+            # DKIM was not scanned — don't advise to configure something we didn't check
+            return recs
 
         if not dkim:
             recs.append(
@@ -608,7 +632,7 @@ class RemediationEngine:
                     category="MTA-STS",
                     title="No MTA-STS policy configured",
                     description=(
-                        f"The domain {self.domain} has no MTA-STS (Mail Transfer Agent Strict Transport Security) "
+                        f"The domain {self.domain} has no MTA-STS (SMTP MTA Strict Transport Security) "
                         "policy. MTA-STS ensures inbound mail is delivered over TLS-encrypted connections."
                     ),
                     impact=(
@@ -726,6 +750,10 @@ class RemediationEngine:
                     reference="https://datatracker.ietf.org/doc/html/rfc5321#section-5",
                 )
             )
+            return recs
+
+        # Null MX (RFC 7505) is intentional — no inbound mail. Skip redundancy advice.
+        if self.result.get("MX_HAS_NULL_MX"):
             return recs
 
         if mx_count == 1:
@@ -872,7 +900,7 @@ class RemediationEngine:
                     "Use usage=3 (DANE-EE) and selector=1 (SPKI) with SHA-256 "
                     "matching for the best compatibility."
                 ),
-                reference="https://www.huque.com/pages/dane-smtp.html",
+                reference="https://datatracker.ietf.org/doc/html/rfc7672",
             ))
         elif not has_tlsa and dnssec_enabled:
             recs.append(Recommendation(
@@ -895,7 +923,7 @@ class RemediationEngine:
                     "Since DNSSEC is already active, DANE records will be automatically "
                     "validated by DANE-aware MTAs."
                 ),
-                reference="https://www.huque.com/pages/dane-smtp.html",
+                reference="https://datatracker.ietf.org/doc/html/rfc7672",
             ))
 
         return recs

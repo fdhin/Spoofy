@@ -5,6 +5,8 @@ import base64
 import logging
 import requests
 
+from .txt_utils import parse_txt_record, parse_tag_value
+
 logger = logging.getLogger("spoofyvibe.dkim")
 
 # Common DKIM selectors to brute-force via DNS
@@ -20,11 +22,9 @@ COMMON_SELECTORS = [
     # Mimecast
     "mimecast", "mimecast20190104",
     # Mailchimp / Mandrill
-    "mandrill", "k2._domainkey", "k3._domainkey",
-    # Amazon SES
-    "amazonses", "ug7nbt3p4vbsqexampleqaus2lqsflk",
+    "mandrill",
     # SendGrid
-    "s1", "s2", "smtpapi",
+    "smtpapi",
     # Mailgun
     "mailo", "mg", "smtp",
     # Zendesk
@@ -39,7 +39,44 @@ COMMON_SELECTORS = [
     "hs1", "hs2", "hubspot",
     # Fastmail
     "fm1", "fm2", "fm3",
+    # Amazon SES — real selectors are per-customer random strings, not guessable
+    "amazonses",
 ]
+
+
+def _get_exact_key_size(der_bytes):
+    """Try to get the exact RSA key size using the cryptography library.
+
+    Returns the key size in bits, or None if the library is unavailable
+    or the key can't be parsed.
+    """
+    try:
+        from cryptography.hazmat.primitives.serialization import load_der_public_key
+        pubkey = load_der_public_key(der_bytes)
+        return pubkey.key_size
+    except Exception:
+        return None
+
+
+def _estimate_key_size(der_bytes):
+    """Estimate RSA key size from DER-encoded SubjectPublicKeyInfo byte length.
+
+    Falls back to this when the cryptography library is not available.
+    This is approximate — non-standard sizes (1536, 3072) may be misclassified.
+    """
+    key_len = len(der_bytes)
+    if key_len <= 0:
+        return 0
+    elif key_len <= 100:
+        return 512
+    elif key_len <= 170:
+        return 1024
+    elif key_len <= 300:
+        return 2048
+    elif key_len <= 550:
+        return 4096
+    else:
+        return key_len * 8
 
 
 class DKIMSelector:
@@ -56,48 +93,34 @@ class DKIMSelector:
         self._analyze_key()
 
     def _analyze_key(self):
-        """Parse DKIM TXT record to extract key type and estimate key size."""
+        """Parse DKIM TXT record to extract key type and measure key size."""
         if not self.raw_value:
             return
 
-        txt = self.raw_value
+        # Use proper tag parser to avoid substring collisions
+        tags = parse_tag_value(self.raw_value)
 
-        # Extract key type (k=)
-        if "k=" in txt:
-            self.key_type = txt.split("k=")[1].split(";")[0].strip()
-        else:
-            self.key_type = "rsa"  # Default per RFC 6376
+        # Key type: k= (default "rsa" per RFC 6376)
+        self.key_type = tags.get("k", "rsa")
 
-        # Extract hash algorithm (h=)
-        if "h=" in txt:
-            self.hash_algorithm = txt.split("h=")[1].split(";")[0].strip()
+        # Hash algorithm: h=
+        self.hash_algorithm = tags.get("h")
 
-        # Extract and measure public key (p=)
-        if "p=" in txt:
-            p_value = txt.split("p=")[1].split(";")[0].strip()
-            p_value = p_value.replace(" ", "")
-            if p_value:
-                try:
-                    key_bytes = base64.b64decode(p_value)
-                    # RSA key size estimation: DER-encoded SubjectPublicKeyInfo
-                    # The key length in bits ≈ len(key_bytes) * 8 - overhead
-                    # For RSA, a rough but practical estimation:
-                    key_len = len(key_bytes)
-                    if key_len <= 0:
-                        self.key_bits = 0
-                    elif key_len <= 100:
-                        self.key_bits = 512
-                    elif key_len <= 170:
-                        self.key_bits = 1024
-                    elif key_len <= 300:
-                        self.key_bits = 2048
-                    elif key_len <= 550:
-                        self.key_bits = 4096
-                    else:
-                        self.key_bits = key_len * 8
-                except Exception:
-                    logger.debug("Could not decode DKIM public key for %s._domainkey.%s",
-                                 self.selector, self.domain)
+        # Public key: p=
+        p_value = tags.get("p", "")
+        p_value = p_value.replace(" ", "")
+        if p_value:
+            try:
+                key_bytes = base64.b64decode(p_value)
+                # Try exact key size via cryptography library first
+                exact = _get_exact_key_size(key_bytes)
+                if exact is not None:
+                    self.key_bits = exact
+                else:
+                    self.key_bits = _estimate_key_size(key_bytes)
+            except Exception:
+                logger.debug("Could not decode DKIM public key for %s._domainkey.%s",
+                             self.selector, self.domain)
 
     @property
     def is_weak(self):
@@ -214,7 +237,7 @@ class DKIM:
         try:
             answers = resolver.resolve(qname, "TXT")
             for rdata in answers:
-                txt = str(rdata).replace('"', "")
+                txt = parse_txt_record(rdata)
                 if "p=" in txt:
                     return txt
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
@@ -227,10 +250,10 @@ class DKIM:
     def _resolve_dkim_via_cname(self, resolver, qname):
         """Check if qname has a CNAME, follow it, and resolve TXT there.
 
-        When an authoritative NS returns a CNAME pointing to a different zone
-        (e.g. M365's .onmicrosoft.com), the auth NS can't resolve the target.
-        We fall back to a public recursive resolver (1.1.1.1) which can follow
-        the full CNAME chain across zones.
+        Defense-in-depth for CNAME-based DKIM setups (e.g. M365). A recursive
+        resolver normally chases CNAMEs automatically, but this explicit
+        fallback handles edge cases where the primary resolver can't follow
+        the chain across zones.
         """
         try:
             cname_answers = resolver.resolve(qname, "CNAME")

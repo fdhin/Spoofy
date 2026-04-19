@@ -33,33 +33,44 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
 
     # Run core DNS lookups concurrently in thread pool
     dns_info = await loop.run_in_executor(None, DNS, domain)
-    server = dns_info.dns_server
 
-    # Run SPF, DMARC, BIMI, MX, MTA-STS lookups concurrently
-    spf_future = loop.run_in_executor(None, SPF, domain, server)
-    dmarc_future = loop.run_in_executor(None, DMARC, domain, server)
-    bimi_future = loop.run_in_executor(None, BIMI, domain, server)
-    mx_future = loop.run_in_executor(None, lambda: MX(domain, server, check_starttls=check_starttls))
-    mta_sts_future = loop.run_in_executor(None, MTASTS, domain, server)
-    dnssec_future = loop.run_in_executor(None, DNSSEC, domain, server)
-    caa_future = loop.run_in_executor(None, CAA, domain, server)
+    # Two-resolver architecture:
+    #   auth_server = authoritative NS for the target domain's zone.
+    #                 Used for same-zone queries (SPF, DMARC, BIMI, MX, CAA, etc.)
+    #   Cross-zone modules (DANE, M365) receive None so they use their
+    #   internal recursive resolver default. Authoritative NSes only answer
+    #   for their own zone — querying TLSA on a third-party MX host or
+    #   .onmicrosoft.com via the domain's auth NS produces false negatives.
+    auth_server = dns_info.dns_server
+
+    # Run same-zone lookups concurrently
+    spf_future = loop.run_in_executor(None, SPF, domain, auth_server)
+    dmarc_future = loop.run_in_executor(None, DMARC, domain, auth_server)
+    bimi_future = loop.run_in_executor(None, BIMI, domain, auth_server)
+    mx_future = loop.run_in_executor(None, lambda: MX(domain, auth_server, check_starttls=check_starttls))
+    mta_sts_future = loop.run_in_executor(None, MTASTS, domain, auth_server)
+    dnssec_future = loop.run_in_executor(None, DNSSEC, domain, auth_server)
+    caa_future = loop.run_in_executor(None, CAA, domain, auth_server)
 
     spf, dmarc, bimi_info, mx_info, mta_sts, dnssec_info, caa_info = await asyncio.gather(
         spf_future, dmarc_future, bimi_future, mx_future, mta_sts_future, dnssec_future, caa_future
     )
 
-    # M365 tenant detection (uses MX results, so runs after MX)
+    # M365 tenant detection — cross-zone (queries .onmicrosoft.com),
+    # so uses recursive resolver (None → module defaults to 1.1.1.1)
     m365_info = await loop.run_in_executor(
-        None, lambda: M365Tenant(domain, mx_info.to_dict().get("MX_RECORDS", []), server)
+        None, lambda: M365Tenant(domain, mx_info.to_dict().get("MX_RECORDS", []))
     )
 
     # DKIM can be slow (API + DNS brute-force), run if enabled
     dkim_data = {}
     if enable_dkim:
-        dkim = await loop.run_in_executor(None, DKIM, domain, server)
+        dkim = await loop.run_in_executor(None, DKIM, domain, auth_server)
         dkim_data = dkim.to_dict()
+        dkim_data["DKIM_SCANNED"] = True
     else:
-        dkim_data = {"DKIM": None, "DKIM_SELECTORS": [], "DKIM_SELECTOR_COUNT": 0, "DKIM_HAS_WEAK_KEYS": False}
+        dkim_data = {"DKIM": None, "DKIM_SELECTORS": [], "DKIM_SELECTOR_COUNT": 0,
+                     "DKIM_HAS_WEAK_KEYS": False, "DKIM_SCANNED": False}
 
     # Validate MX hosts against MTA-STS policy
     mta_sts_mx_mismatch = mta_sts.validate_mx_against_policy(mx_info.get_mx_hosts())
@@ -67,7 +78,7 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
     spoofing_info = Spoofing(
         domain,
         dmarc.dmarc_record,
-        dmarc.policy,
+        dmarc.effective_policy,
         dmarc.aspf,
         spf.spf_record,
         spf.all_mechanism,
@@ -86,10 +97,13 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
         "SPF_TOO_MANY_DNS_QUERIES": spf.too_many_dns_queries,
         "DMARC": dmarc.dmarc_record,
         "DMARC_POLICY": dmarc.policy,
+        "DMARC_EFFECTIVE_POLICY": dmarc.effective_policy,
+        "DMARC_ORG_DOMAIN_FALLBACK": dmarc.is_org_domain_fallback,
         "DMARC_PCT": dmarc.pct,
         "DMARC_ASPF": dmarc.aspf,
         "DMARC_SP": dmarc.sp,
-        "DMARC_FORENSIC_REPORT": dmarc.fo,
+        "DMARC_FO": dmarc.fo,
+        "DMARC_FORENSIC_REPORT": dmarc.ruf,
         "DMARC_AGGREGATE_REPORT": dmarc.rua,
         "BIMI_RECORD": bimi_info.bimi_record,
         "BIMI_VERSION": bimi_info.version,
@@ -106,6 +120,7 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
 
     # Add MX data
     result.update(mx_info.to_dict())
+    result["STARTTLS_SCANNED"] = check_starttls
 
     # Add MTA-STS data
     result.update(mta_sts.to_dict())
@@ -120,9 +135,10 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
     # Add M365 data
     result.update(m365_info.to_dict())
 
-    # DANE/TLSA check (needs MX hosts, runs after MX data is collected)
+    # DANE/TLSA check — cross-zone (queries _25._tcp.<third-party MX host>),
+    # so uses recursive resolver (None → module defaults to 1.1.1.1)
     dane_info = await loop.run_in_executor(
-        None, lambda: DANE(domain, mx_info.get_mx_hosts(), server)
+        None, lambda: DANE(domain, mx_info.get_mx_hosts())
     )
     result.update(dane_info.to_dict())
 
@@ -165,13 +181,24 @@ async def process_domains(domains, output, enable_dkim=False,
         # For file outputs, gather all results
         tasks = [process_with_semaphore(d) for d in domains]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        # Filter out exceptions
+        # Replace exceptions with stub error results so failed domains
+        # appear in the output instead of silently disappearing.
         clean_results = []
+        failed_count = 0
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 logging.error("Failed to process %s: %s", domains[i], r)
+                clean_results.append({
+                    "DOMAIN": domains[i],
+                    "SCAN_ERROR": str(r),
+                    "SECURITY_SCORE": 0,
+                    "SECURITY_GRADE": "F",
+                })
+                failed_count += 1
             else:
                 clean_results.append(r)
+        if failed_count:
+            logging.warning("%d domain(s) failed to scan", failed_count)
         results = clean_results
 
     return results
@@ -254,13 +281,20 @@ def main():
 
     args = parser.parse_args()
 
-    # Configure logging
+    # Configure logging — use the spoofyvibe logger specifically,
+    # not basicConfig, to avoid stomping global logging configuration
+    # when imported as a library (e.g. --serve mode with FastAPI).
     log_level = logging.DEBUG if args.verbose else logging.WARNING
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    spoofyvibe_logger = logging.getLogger("spoofyvibe")
+    spoofyvibe_logger.setLevel(log_level)
+    if not spoofyvibe_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setLevel(log_level)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        spoofyvibe_logger.addHandler(handler)
 
     # --- Web server mode ---
     if args.serve:

@@ -1,10 +1,42 @@
 # modules/mta_sts.py
 
+"""
+MTA-STS (SMTP MTA Strict Transport Security) and TLS-RPT detection.
+
+Implements RFC 8461 §3.3 compliant policy fetching (no redirects) and
+RFC 8461 §4.1 compliant wildcard matching (label-aware, not glob).
+"""
+
 import dns.resolver
 import requests
 import logging
 
+from .txt_utils import parse_txt_record, parse_tag_value
+
 logger = logging.getLogger("spoofyvibe.mta_sts")
+
+
+def _mx_matches_pattern(host, pattern):
+    """RFC 8461 §4.1 label-aware wildcard matching.
+
+    The '*' wildcard matches exactly one DNS label (not multiple).
+    Wildcards are only valid as the leftmost label.
+
+    Examples:
+        _mx_matches_pattern("mx1.example.com", "*.example.com")  → True
+        _mx_matches_pattern("sub.mx1.example.com", "*.example.com")  → False
+        _mx_matches_pattern("mx1.example.com", "mx1.example.com")  → True
+    """
+    host_labels = host.lower().rstrip(".").split(".")
+    pattern_labels = pattern.lower().rstrip(".").split(".")
+    if len(host_labels) != len(pattern_labels):
+        return False
+    for h, p in zip(host_labels, pattern_labels):
+        if p == "*":
+            continue  # wildcard matches exactly one label
+        if h != p:
+            return False
+    return True
 
 
 class MTASTS:
@@ -42,12 +74,12 @@ class MTASTS:
             logger.debug("Querying _mta-sts.%s TXT", self.domain)
             answers = resolver.resolve(f"_mta-sts.{self.domain}", "TXT")
             for rdata in answers:
-                txt = str(rdata).replace('"', "")
-                if "STSv1" in txt or "v=STSv1" in txt:
+                txt = parse_txt_record(rdata)
+                # RFC 8461 §3.1: record must start with "v=STSv1"
+                if txt.strip().startswith("v=STSv1"):
                     self.mta_sts_txt = txt
-                    # Extract id
-                    if "id=" in txt:
-                        self.mta_sts_id = txt.split("id=")[1].split(";")[0].strip()
+                    tags = parse_tag_value(txt)
+                    self.mta_sts_id = tags.get("id")
                     logger.debug("Found MTA-STS TXT for %s: %s", self.domain, txt)
                     return
             logger.debug("No MTA-STS TXT record found for %s", self.domain)
@@ -63,17 +95,28 @@ class MTASTS:
             logger.error("Unexpected error querying MTA-STS for %s: %s", self.domain, e)
 
     def _fetch_mta_sts_policy(self):
-        """Fetch MTA-STS policy from https://mta-sts.<domain>/.well-known/mta-sts.txt."""
+        """Fetch MTA-STS policy from https://mta-sts.<domain>/.well-known/mta-sts.txt.
+
+        RFC 8461 §3.3: MUST NOT follow redirects. A redirect to an
+        attacker-controlled URL would defeat MTA-STS. Any non-200 response
+        (including 3xx) is treated as "no policy".
+        """
         url = f"https://mta-sts.{self.domain}/.well-known/mta-sts.txt"
         try:
             logger.debug("Fetching MTA-STS policy from %s", url)
-            resp = requests.get(url, timeout=10, allow_redirects=True)
+            resp = requests.get(url, timeout=10, allow_redirects=False)
             if resp.status_code == 200:
-                self.policy_raw = resp.text.strip()
+                # Use explicit UTF-8 decode for predictable charset handling
+                self.policy_raw = resp.content.decode("utf-8", errors="replace").strip()
                 self._parse_policy(self.policy_raw)
                 logger.debug("MTA-STS policy for %s: mode=%s, max_age=%s, mx=%s",
                              self.domain, self.policy_mode, self.policy_max_age,
                              self.policy_mx_patterns)
+            elif 300 <= resp.status_code < 400:
+                logger.warning(
+                    "MTA-STS policy redirect (%d) for %s — RFC 8461 §3.3 violation",
+                    resp.status_code, self.domain,
+                )
             else:
                 logger.warning("MTA-STS policy HTTP %d for %s", resp.status_code, self.domain)
         except requests.exceptions.SSLError as e:
@@ -114,11 +157,12 @@ class MTASTS:
             logger.debug("Querying _smtp._tls.%s TXT", self.domain)
             answers = resolver.resolve(f"_smtp._tls.{self.domain}", "TXT")
             for rdata in answers:
-                txt = str(rdata).replace('"', "")
-                if "TLSRPTv1" in txt or "v=TLSRPTv1" in txt:
+                txt = parse_txt_record(rdata)
+                # RFC 8460 §3: record must start with "v=TLSRPTv1"
+                if txt.strip().startswith("v=TLSRPTv1"):
                     self.tls_rpt_record = txt
-                    if "rua=" in txt:
-                        self.tls_rpt_rua = txt.split("rua=")[1].split(";")[0].strip()
+                    tags = parse_tag_value(txt)
+                    self.tls_rpt_rua = tags.get("rua")
                     logger.debug("Found TLS-RPT for %s: %s", self.domain, txt)
                     return
             logger.debug("No TLS-RPT record found for %s", self.domain)
@@ -134,20 +178,20 @@ class MTASTS:
             logger.error("Unexpected error querying TLS-RPT for %s: %s", self.domain, e)
 
     def validate_mx_against_policy(self, mx_hosts):
-        """Check if MX hosts match the policy's mx patterns. Returns list of unmatched hosts."""
+        """Check if MX hosts match the policy's mx patterns.
+
+        Returns list of unmatched hosts. Uses RFC 8461 §4.1 label-aware
+        wildcard matching instead of fnmatch (which treats * as multi-label).
+        """
         if not self.policy_mx_patterns or not mx_hosts:
             return []
 
-        import fnmatch
         unmatched = []
         for host in mx_hosts:
-            host_lower = host.lower().rstrip(".")
-            matched = False
-            for pattern in self.policy_mx_patterns:
-                pattern_lower = pattern.lower().rstrip(".")
-                if fnmatch.fnmatch(host_lower, pattern_lower):
-                    matched = True
-                    break
+            matched = any(
+                _mx_matches_pattern(host, pattern)
+                for pattern in self.policy_mx_patterns
+            )
             if not matched:
                 unmatched.append(host)
         return unmatched

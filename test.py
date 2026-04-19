@@ -18,6 +18,7 @@ class TestSpoofy(unittest.TestCase):
         self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_1(self):
+        # p=none + sp=none + -all → org unprotected, sub unprotected → SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_1.com",
             dmarc_record="p=none, sp=none, aspf=r",
@@ -29,7 +30,7 @@ class TestSpoofy(unittest.TestCase):
             sp="none",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 1)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_2(self):
         spoofing = Spoofing(
@@ -46,6 +47,7 @@ class TestSpoofy(unittest.TestCase):
         self.assertEqual(spoofing.spoofable, 2)
 
     def test_case_3(self):
+        # p=none + sp defaults to p(none) → org unprotected, sub unprotected → SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_3.com",
             dmarc_record="p=none",
@@ -57,9 +59,10 @@ class TestSpoofy(unittest.TestCase):
             sp=None,
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 4)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_4(self):
+        # p=none + sp defaults to p(none) → org unprotected, sub unprotected → SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_4.com",
             dmarc_record="p=none",
@@ -71,9 +74,10 @@ class TestSpoofy(unittest.TestCase):
             sp=None,
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 4)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_5(self):
+        # p=none + sp=quarantine + -all → org unprotected, sub protected → ORG_SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_5.com",
             dmarc_record="p=none, sp=quarantine",
@@ -85,7 +89,7 @@ class TestSpoofy(unittest.TestCase):
             sp="quarantine",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 5)
+        self.assertEqual(spoofing.spoofable, 2)
 
     def test_case_7(self):
         spoofing = Spoofing(
@@ -99,9 +103,11 @@ class TestSpoofy(unittest.TestCase):
             sp="none",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 7)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_8(self):
+        # p=none + sp=reject + aspf=s → org unprotected, sub protected → ORG_SPOOFABLE
+        # THE BUG CASE: old code returned 8, correct answer is 2
         spoofing = Spoofing(
             domain="test_case_8.com",
             dmarc_record="p=none, sp=reject, aspf=s",
@@ -113,9 +119,10 @@ class TestSpoofy(unittest.TestCase):
             sp="reject",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 8)
+        self.assertEqual(spoofing.spoofable, 2)
 
     def test_case_9(self):
+        # p=none + sp defaults to p(none) → org unprotected, sub unprotected → SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_9.com",
             dmarc_record="p=none",
@@ -127,9 +134,10 @@ class TestSpoofy(unittest.TestCase):
             sp=None,
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 4)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_10(self):
+        # p=none + aspf=r + sp defaults to p(none) → fully spoofable
         spoofing = Spoofing(
             domain="test_case_10.com",
             dmarc_record="p=none, aspf=r",
@@ -141,9 +149,10 @@ class TestSpoofy(unittest.TestCase):
             sp=None,
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 4)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_11(self):
+        # p=none + aspf=s + sp defaults to p(none) → fully spoofable
         spoofing = Spoofing(
             domain="test_case_11.com",
             dmarc_record="p=none, aspf=s",
@@ -155,9 +164,10 @@ class TestSpoofy(unittest.TestCase):
             sp=None,
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 4)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_12(self):
+        # p=none + sp=quarantine → org unprotected, sub protected → ORG_SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_12.com",
             dmarc_record="p=none, sp=quarantine",
@@ -169,9 +179,10 @@ class TestSpoofy(unittest.TestCase):
             sp="quarantine",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 5)
+        self.assertEqual(spoofing.spoofable, 2)
 
     def test_case_13(self):
+        # p=none + sp=reject → org unprotected, sub protected → ORG_SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_13.com",
             dmarc_record="p=none, sp=reject",
@@ -183,9 +194,10 @@ class TestSpoofy(unittest.TestCase):
             sp="reject",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 5)
+        self.assertEqual(spoofing.spoofable, 2)
 
     def test_case_14(self):
+        # p=none + sp=none → org unprotected, sub unprotected → SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_14.com",
             dmarc_record="p=none, sp=none",
@@ -197,7 +209,7 @@ class TestSpoofy(unittest.TestCase):
             sp="none",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 7)
+        self.assertEqual(spoofing.spoofable, 0)
 
     def test_case_15(self):
         spoofing = Spoofing(
@@ -284,6 +296,7 @@ class TestSpoofy(unittest.TestCase):
         self.assertEqual(spoofing.spoofable, 8)
 
     def test_case_21(self):
+        # p=none + sp=quarantine + aspf=s → org unprotected, sub protected → ORG_SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_21.com",
             dmarc_record="p=none, sp=quarantine, aspf=s",
@@ -295,9 +308,11 @@ class TestSpoofy(unittest.TestCase):
             sp="quarantine",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 8)
+        self.assertEqual(spoofing.spoofable, 2)
 
     def test_case_22(self):
+        # p=none + sp=reject + aspf=s → org unprotected, sub protected → ORG_SPOOFABLE
+        # This is the core reviewer bug: old code returned 8 ("not spoofable")
         spoofing = Spoofing(
             domain="test_case_22.com",
             dmarc_record="p=none, sp=reject, aspf=s",
@@ -309,9 +324,10 @@ class TestSpoofy(unittest.TestCase):
             sp="reject",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 8)
+        self.assertEqual(spoofing.spoofable, 2)
 
     def test_case_23(self):
+        # p=quarantine + sp=none → org protected, sub unprotected → SUBDOMAIN_SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_23.com",
             dmarc_record="p=quarantine, sp=none, aspf=s",
@@ -323,7 +339,7 @@ class TestSpoofy(unittest.TestCase):
             sp="none",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 8)
+        self.assertEqual(spoofing.spoofable, 1)
 
     def test_case_24(self):
         spoofing = Spoofing(
@@ -354,6 +370,7 @@ class TestSpoofy(unittest.TestCase):
         self.assertEqual(spoofing.spoofable, 8)
 
     def test_case_26(self):
+        # p=reject + sp=none → org protected, sub unprotected → SUBDOMAIN_SPOOFABLE
         spoofing = Spoofing(
             domain="test_case_26.com",
             dmarc_record="p=reject, sp=none, aspf=s",
@@ -365,7 +382,7 @@ class TestSpoofy(unittest.TestCase):
             sp="none",
             pct=100,
         )
-        self.assertEqual(spoofing.spoofable, 8)
+        self.assertEqual(spoofing.spoofable, 1)
 
     def test_case_27(self):
         spoofing = Spoofing(

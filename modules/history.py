@@ -19,7 +19,7 @@ DEFAULT_DB_DIR = os.path.expanduser("~/.spoofyvibe")
 DEFAULT_DB_PATH = os.path.join(DEFAULT_DB_DIR, "history.db")
 
 # Schema version for future migrations
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class ScanHistory:
@@ -70,6 +70,7 @@ class ScanHistory:
                     mta_sts_score INTEGER,
                     mx_score INTEGER,
                     dnssec_score INTEGER,
+                    caa_score INTEGER,
                     result_json TEXT NOT NULL
                 );
 
@@ -80,16 +81,17 @@ class ScanHistory:
                 CREATE INDEX IF NOT EXISTS idx_scans_domain_ts
                     ON scans(domain, timestamp);
             """)
+            conn.commit()
 
-            # Set schema version
+            # Run migrations for existing databases before setting version
+            self._migrate(conn)
+
+            # Set schema version AFTER migration completes
             conn.execute(
                 "INSERT OR REPLACE INTO schema_info (key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
             )
             conn.commit()
-
-            # Migrate from v1 → v2: add dnssec_score column
-            self._migrate(conn)
 
             logger.debug("Database initialized at %s", self.db_path)
         finally:
@@ -97,13 +99,19 @@ class ScanHistory:
 
     def _migrate(self, conn):
         """Run schema migrations for existing databases."""
-        # Check existing columns to see if migration is needed
         cursor = conn.execute("PRAGMA table_info(scans)")
         columns = {row["name"] for row in cursor.fetchall()}
 
+        # v1 → v2: add dnssec_score
         if "dnssec_score" not in columns:
             logger.info("Migrating database: adding dnssec_score column")
             conn.execute("ALTER TABLE scans ADD COLUMN dnssec_score INTEGER")
+            conn.commit()
+
+        # v2 → v3: add caa_score
+        if "caa_score" not in columns:
+            logger.info("Migrating database: adding caa_score column")
+            conn.execute("ALTER TABLE scans ADD COLUMN caa_score INTEGER")
             conn.commit()
 
     def save_scan(self, result):
@@ -138,8 +146,9 @@ class ScanHistory:
                 """INSERT INTO scans
                    (domain, timestamp, score, grade, spoofable,
                     spf_score, dmarc_score, dkim_score, bimi_score,
-                    spoof_score, mta_sts_score, mx_score, dnssec_score, result_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    spoof_score, mta_sts_score, mx_score, dnssec_score,
+                    caa_score, result_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     domain,
                     timestamp,
@@ -154,6 +163,7 @@ class ScanHistory:
                     breakdown.get("mta_sts", {}).get("score", 0),
                     breakdown.get("mx", {}).get("score", 0),
                     breakdown.get("dnssec", {}).get("score", 0),
+                    breakdown.get("caa", {}).get("score", 0),
                     json.dumps(result, default=str),
                 ),
             )
@@ -182,8 +192,9 @@ class ScanHistory:
                     """INSERT INTO scans
                        (domain, timestamp, score, grade, spoofable,
                         spf_score, dmarc_score, dkim_score, bimi_score,
-                        spoof_score, mta_sts_score, mx_score, dnssec_score, result_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        spoof_score, mta_sts_score, mx_score, dnssec_score,
+                        caa_score, result_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         domain, timestamp, score, grade, spoofable_int,
                         breakdown.get("spf", {}).get("score", 0),
@@ -194,6 +205,7 @@ class ScanHistory:
                         breakdown.get("mta_sts", {}).get("score", 0),
                         breakdown.get("mx", {}).get("score", 0),
                         breakdown.get("dnssec", {}).get("score", 0),
+                        breakdown.get("caa", {}).get("score", 0),
                         json.dumps(result, default=str),
                     ),
                 )
@@ -226,7 +238,8 @@ class ScanHistory:
                 rows = conn.execute(
                     """SELECT id, domain, timestamp, score, grade, spoofable,
                               spf_score, dmarc_score, dkim_score, bimi_score,
-                              spoof_score, mta_sts_score, mx_score, dnssec_score
+                              spoof_score, mta_sts_score, mx_score, dnssec_score,
+                              caa_score
                        FROM scans
                        ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
                     (limit, offset),
@@ -257,7 +270,8 @@ class ScanHistory:
             rows = conn.execute(
                 """SELECT id, domain, timestamp, score, grade, spoofable,
                           spf_score, dmarc_score, dkim_score, bimi_score,
-                          spoof_score, mta_sts_score, mx_score
+                          spoof_score, mta_sts_score, mx_score, dnssec_score,
+                          caa_score
                    FROM scans WHERE domain = ?
                    ORDER BY timestamp DESC LIMIT ?""",
                 (domain, limit),
@@ -278,7 +292,8 @@ class ScanHistory:
             rows = conn.execute(
                 """SELECT timestamp, score, grade,
                           spf_score, dmarc_score, dkim_score, bimi_score,
-                          spoof_score, mta_sts_score, mx_score, dnssec_score
+                          spoof_score, mta_sts_score, mx_score, dnssec_score,
+                          caa_score
                    FROM scans WHERE domain = ?
                    ORDER BY timestamp ASC LIMIT ?""",
                 (domain, limit),

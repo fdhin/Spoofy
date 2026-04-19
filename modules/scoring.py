@@ -6,13 +6,17 @@ Weighted scoring engine for email security posture.
 Computes a 0-100 score and A+→F letter grade per domain based on:
   - SPF configuration (16 pts)
   - DMARC configuration (22 pts)
-  - DKIM presence & key strength (15 pts)
+  - DKIM presence & key strength (15 pts) — excluded if not scanned
   - BIMI presence (5 pts)
   - CAA configuration (5 pts)
   - Spoofability verdict (15 pts)
   - MTA-STS & TLS-RPT (10 pts)
-  - MX infrastructure (7 pts)
+  - MX infrastructure (7 pts) — STARTTLS portion excluded if not scanned
   - DNSSEC (5 pts)
+
+When optional scan features (DKIM, STARTTLS) are disabled, the max
+possible score is reduced proportionally. Grade boundaries use the
+percentage of max, so grades are comparable across scan modes.
 """
 
 
@@ -50,10 +54,17 @@ class SecurityScore:
         self.grade = self._calculate_grade()
 
     def _calculate_score(self):
-        """Calculate the total weighted score (0-100)."""
+        """Calculate the total weighted score.
+
+        When optional features (DKIM, STARTTLS) aren't scanned, their max
+        is excluded so the percentage-based grade stays honest across modes.
+        """
+        dkim_scanned = self.result.get("DKIM_SCANNED", True)
+        starttls_scanned = self.result.get("STARTTLS_SCANNED", True)
+
         spf_score = self._score_spf()
         dmarc_score = self._score_dmarc()
-        dkim_score = self._score_dkim()
+        dkim_score = self._score_dkim() if dkim_scanned else None
         bimi_score = self._score_bimi()
         caa_score = self._score_caa()
         spoof_score = self._score_spoofability()
@@ -61,20 +72,33 @@ class SecurityScore:
         mx_score = self._score_mx()
         dnssec_score = self._score_dnssec()
 
+        # MX max is 7 normally; STARTTLS contributes 3 of those points.
+        # When STARTTLS isn't scanned, reduce MX max by 3.
+        mx_max = 7 if starttls_scanned else 4
+
         self.breakdown = {
             "spf": {"score": spf_score, "max": 16, "details": self._spf_details()},
             "dmarc": {"score": dmarc_score, "max": 22, "details": self._dmarc_details()},
-            "dkim": {"score": dkim_score, "max": 15, "details": self._dkim_details()},
+            "dkim": {"score": dkim_score, "max": 15 if dkim_scanned else 0,
+                     "details": self._dkim_details()},
             "bimi": {"score": bimi_score, "max": 5, "details": self._bimi_details()},
             "caa": {"score": caa_score, "max": 5, "details": self._caa_details()},
             "spoofability": {"score": spoof_score, "max": 15, "details": self._spoof_details()},
             "mta_sts": {"score": mta_sts_score, "max": 10, "details": self._mta_sts_details()},
-            "mx": {"score": mx_score, "max": 7, "details": self._mx_details()},
+            "mx": {"score": mx_score, "max": mx_max, "details": self._mx_details()},
             "dnssec": {"score": dnssec_score, "max": 5, "details": self._dnssec_details()},
         }
 
-        return (spf_score + dmarc_score + dkim_score + bimi_score + caa_score
-                + spoof_score + mta_sts_score + mx_score + dnssec_score)
+        # Sum only categories that were actually scanned
+        total = spf_score + dmarc_score + bimi_score + caa_score
+        total += spoof_score + mta_sts_score + mx_score + dnssec_score
+        if dkim_score is not None:
+            total += dkim_score
+
+        # Compute max possible score
+        self.max_score = sum(d["max"] for d in self.breakdown.values())
+
+        return total
 
     def _score_spf(self):
         """Score SPF configuration (0-16 points)."""
@@ -124,7 +148,7 @@ class SecurityScore:
         score += 3
 
         # Valid syntax — starts with v=DMARC1 (+2)
-        if "DMARC1" in str(dmarc):
+        if str(dmarc).strip().startswith("v=DMARC1"):
             score += 2
 
         # Policy strength: reject (+8), quarantine (+5), none (+1)
@@ -150,7 +174,9 @@ class SecurityScore:
             score += 1
 
         # Penalty for wildcard DNS Subdomain Hijacking
-        if wildcard_dns and (sp != "reject" and policy != "reject"):
+        # Effective subdomain policy: sp overrides p for subdomains (RFC 7489 §6.3)
+        effective_sp = sp if sp else policy
+        if wildcard_dns and effective_sp != "reject":
             score -= 5
 
         return max(0, min(score, 22))
@@ -169,7 +195,7 @@ class SecurityScore:
         score += 7
 
         # Multiple selectors found (+3) — indicates good key rotation
-        if len(selectors) > 1 or (dkim and "\n" in str(dkim)):
+        if len(selectors) > 1:
             score += 3
 
         # Key strength: all strong keys (+5), has weak (-3 from full)
@@ -185,7 +211,13 @@ class SecurityScore:
         return min(score, 15)
 
     def _score_bimi(self):
-        """Score BIMI configuration (0-5 points)."""
+        """Score BIMI configuration (0-5 points).
+
+        Note: BIMI points are awarded regardless of DMARC policy. The BIMI
+        record itself is valid even with p=none, though receivers won't
+        render the logo without quarantine/reject. The _bimi_details()
+        method flags this dependency.
+        """
         score = 0
         bimi = self.result.get("BIMI_RECORD")
         location = self.result.get("BIMI_LOCATION")
@@ -257,18 +289,23 @@ class SecurityScore:
         return min(score, 10)
 
     def _score_mx(self):
-        """Score MX infrastructure (0-7 points)."""
+        """Score MX infrastructure (0-7 points).
+
+        When STARTTLS is not scanned, the STARTTLS portion (3 pts) is
+        excluded from both the score and the max.
+        """
         score = 0
-        mx_records = self.result.get("MX_RECORDS", [])
         mx_count = self.result.get("MX_COUNT", 0)
         all_starttls = self.result.get("MX_ALL_STARTTLS")
         has_null_mx = self.result.get("MX_HAS_NULL_MX", False)
+        starttls_scanned = self.result.get("STARTTLS_SCANNED", True)
 
         if mx_count == 0:
             return 0
 
         if has_null_mx:
-            return 7 # Full points for defensive configuration
+            # Null MX is correct config — full points for what was scanned
+            return 7 if starttls_scanned else 4
 
         # MX records exist (+2)
         score += 2
@@ -277,36 +314,51 @@ class SecurityScore:
         if mx_count >= 2:
             score += 2
 
-        # All MX support STARTTLS (+3)
-        if all_starttls is True:
-            score += 3
-        elif all_starttls is None:
-            score += 1  # Could not determine
+        # All MX support STARTTLS (+3) — only if scanned
+        if starttls_scanned:
+            if all_starttls is True:
+                score += 3
+            elif all_starttls is None:
+                score += 1  # Could not determine
 
-        return min(score, 7)
+        max_score = 7 if starttls_scanned else 4
+        return min(score, max_score)
 
     def _score_dnssec(self):
         """Score DNSSEC configuration (0-5 points)."""
         score = 0
         enabled = self.result.get("DNSSEC_ENABLED", False)
+        dnskey_present = self.result.get("DNSSEC_DNSKEY_PRESENT", False)
         has_ds = self.result.get("DNSSEC_HAS_DS", False)
+        ad_flag = self.result.get("DNSSEC_AD_FLAG", False)
 
-        if not enabled:
+        if not dnskey_present and not has_ds:
             return 0
 
-        # DNSKEY records present (+3)
-        score += 3
+        # DNSKEY records present (+1 partial credit even without DS)
+        if dnskey_present:
+            score += 1
 
-        # DS record in parent zone — chain of trust verified (+2)
-        if has_ds:
+        # Full chain of trust: DNSKEY + DS (+2)
+        if enabled:
+            score += 2
+
+        # AD flag validated by recursive resolver (+2)
+        if ad_flag:
             score += 2
 
         return min(score, 5)
 
     def _calculate_grade(self):
-        """Convert numeric score to letter grade."""
+        """Convert numeric score to letter grade.
+
+        Uses percentage of max_score so grades are comparable across
+        scan modes (e.g. with/without --dkim).
+        """
+        max_score = getattr(self, "max_score", 100) or 100
+        pct = (self.score / max_score) * 100
         for threshold, grade in self.GRADE_BOUNDARIES:
-            if self.score >= threshold:
+            if pct >= threshold:
                 return grade
         return "F"
 
@@ -402,8 +454,9 @@ class SecurityScore:
             
         wildcard_dns = self.result.get("DMARC_HAS_WILDCARD_DNS", False)
         if wildcard_dns:
-            if sp != "reject" and policy != "reject":
-                details.append(("❗️", "Wildcard DNS detected without reject policy. High risk of subdomain spoofing!"))
+            effective_sp = sp if sp else policy
+            if effective_sp != "reject":
+                details.append(("❗️", "Wildcard DNS detected without reject subdomain policy. High risk of subdomain spoofing!"))
             else:
                 details.append(("✅", "Wildcard DNS detected, but protected by reject policy."))
 
@@ -412,15 +465,19 @@ class SecurityScore:
     def _dkim_details(self):
         """Return detail items for DKIM scoring."""
         details = []
+        dkim_scanned = self.result.get("DKIM_SCANNED", True)
         dkim = self.result.get("DKIM")
         selectors = self.result.get("DKIM_SELECTORS", [])
-        has_weak = self.result.get("DKIM_HAS_WEAK_KEYS", False)
+
+        if not dkim_scanned:
+            details.append(("ℹ️", "DKIM was not scanned (use --dkim to enable)"))
+            return details
 
         if not dkim:
             details.append(("⚠️", "No DKIM selectors found"))
             return details
 
-        count = len(selectors) if selectors else str(dkim).count("[*]")
+        count = len(selectors)
         details.append(("✅", f"{count} DKIM selector(s) found"))
 
         if count > 1:
@@ -434,8 +491,6 @@ class SecurityScore:
                         details.append(("✅", f"{sel['selector']}: {bits}-bit key (strong)"))
                     else:
                         details.append(("❌", f"{sel['selector']}: {bits}-bit key (weak — upgrade to 2048+)"))
-        elif has_weak:
-            details.append(("❌", "One or more DKIM keys are < 2048 bits"))
 
         return details
 
@@ -445,12 +500,17 @@ class SecurityScore:
         bimi = self.result.get("BIMI_RECORD")
         location = self.result.get("BIMI_LOCATION")
         authority = self.result.get("BIMI_AUTHORITY")
+        dmarc_policy = self.result.get("DMARC_POLICY")
 
         if not bimi:
             details.append(("ℹ️", "No BIMI record found (optional)"))
             return details
 
         details.append(("✅", "BIMI record exists"))
+
+        # BIMI requires DMARC quarantine/reject for receivers to render the logo
+        if dmarc_policy not in ("quarantine", "reject"):
+            details.append(("⚠️", "BIMI is decorative without DMARC enforcement (p=quarantine or p=reject) — receivers will not render the logo"))
 
         if location and str(location).strip():
             details.append(("✅", f"Logo location: {location}"))
@@ -583,33 +643,49 @@ class SecurityScore:
         """Return detail items for DNSSEC scoring."""
         details = []
         enabled = self.result.get("DNSSEC_ENABLED", False)
+        dnskey_present = self.result.get("DNSSEC_DNSKEY_PRESENT", False)
         has_ds = self.result.get("DNSSEC_HAS_DS", False)
+        ad_flag = self.result.get("DNSSEC_AD_FLAG", False)
         key_count = self.result.get("DNSSEC_KEY_COUNT", 0)
+        has_dane = self.result.get("DANE_HAS_TLSA", False)
 
-        if not enabled:
+        if not dnskey_present and not has_ds:
             details.append(("⚠️", "DNSSEC is not enabled"))
+            if has_dane:
+                details.append(("❌", "DANE TLSA records exist but DNSSEC is absent — TLSA is ineffective without DNSSEC"))
             return details
 
-        details.append(("✅", f"DNSSEC enabled ({key_count} DNSKEY record(s))"))
-
-        if has_ds:
+        if enabled:
+            details.append(("✅", f"DNSSEC enabled ({key_count} DNSKEY record(s))"))
             details.append(("✅", "DS record found — chain of trust verified"))
-        else:
-            details.append(("⚠️", "No DS record in parent zone — chain of trust incomplete"))
+        elif dnskey_present and not has_ds:
+            details.append(("❌", f"DNSSEC broken — {key_count} DNSKEY record(s) but no DS in parent zone"))
+            details.append(("❌", "Chain of trust is incomplete — validating resolvers will NOT trust this zone"))
+
+        if ad_flag:
+            details.append(("✅", "AD flag validated — recursive resolver confirms DNSSEC chain"))
+        elif enabled:
+            details.append(("⚠️", "AD flag not set — DNSSEC may not be fully operational"))
+
+        if has_dane and not enabled:
+            details.append(("❌", "DANE TLSA records exist but DNSSEC chain is broken — TLSA is trivially spoofable"))
 
         return details
 
     def to_dict(self):
         """Return score data as a dictionary for inclusion in results."""
+        max_score = getattr(self, "max_score", 100) or 100
         return {
             "SECURITY_SCORE": self.score,
+            "SECURITY_SCORE_MAX": max_score,
+            "SECURITY_SCORE_PCT": round(self.score / max_score * 100) if max_score > 0 else 0,
             "SECURITY_GRADE": self.grade,
             "SCORE_BREAKDOWN": {
                 category: {
-                    "score": data["score"],
+                    "score": data["score"] if data["score"] is not None else "N/A",
                     "max": data["max"],
                     "percentage": round(data["score"] / data["max"] * 100)
-                    if data["max"] > 0
+                    if data["max"] > 0 and data["score"] is not None
                     else 0,
                 }
                 for category, data in self.breakdown.items()
@@ -621,13 +697,15 @@ class SecurityScore:
         }
 
     def __str__(self):
+        max_score = getattr(self, "max_score", 100) or 100
         lines = [
-            f"Security Score: {self.score}/100 ({self.grade})",
+            f"Security Score: {self.score}/{max_score} ({self.grade})",
             "",
         ]
         for category, data in self.breakdown.items():
+            score_str = str(data['score']) if data['score'] is not None else "N/A"
             lines.append(
-                f"  {category.upper()}: {data['score']}/{data['max']} pts"
+                f"  {category.upper()}: {score_str}/{data['max']} pts"
             )
             for icon, detail in data["details"]:
                 lines.append(f"    {icon} {detail}")
