@@ -255,9 +255,11 @@ class MX:
         in the EHLO response. It does NOT initiate a TLS handshake, verify
         the certificate, or check TLS version. The result should be
         interpreted as "server claims STARTTLS support", not "TLS works."
+
+        Timeouts are set to 20s to accommodate providers like Microsoft 365
+        EOP which tarpit inbound port 25 connections from unknown sources.
         """
         resolver = self._make_resolver(timeout=10)
-        all_ok = True
         for mx in self.records:
             if mx.is_null_mx:
                 mx.starttls = None
@@ -269,19 +271,18 @@ class MX:
                     logger.warning("Could not resolve %s to IP", mx.host)
                     mx.starttls = None
                     mx.starttls_note = "DNS resolution failed"
-                    all_ok = False
                     continue
                 mx.ip_address = ip_address
                 logger.debug("Testing STARTTLS on %s (%s):25", mx.host, mx.ip_address)
 
-                sock = socket.create_connection((mx.ip_address, 25), timeout=10)
-                banner = _read_smtp_response(sock, timeout=10)
+                sock = socket.create_connection((mx.ip_address, 25), timeout=20)
+                banner = _read_smtp_response(sock, timeout=20)
                 logger.debug("SMTP banner from %s: %s", mx.host, banner.strip())
 
                 # Use .invalid TLD per RFC 6761 — most MTAs accept it,
                 # won't leak as a real hostname, and avoids strict EHLO rejection.
                 sock.sendall(b"EHLO spoofyvibe.scan.invalid\r\n")
-                ehlo_resp = _read_smtp_response(sock, timeout=10)
+                ehlo_resp = _read_smtp_response(sock, timeout=20)
 
                 if "STARTTLS" in ehlo_resp.upper():
                     mx.starttls = True
@@ -289,7 +290,6 @@ class MX:
                     logger.debug("STARTTLS supported on %s", mx.host)
                 else:
                     mx.starttls = False
-                    all_ok = False
                     logger.warning("STARTTLS NOT supported on %s", mx.host)
 
                 sock.sendall(b"QUIT\r\n")
@@ -297,25 +297,33 @@ class MX:
             except socket.timeout:
                 logger.warning("STARTTLS check timeout for %s", mx.host)
                 mx.starttls = None
-                mx.starttls_note = "Connection timeout"
-                all_ok = False
+                mx.starttls_note = "Connection timeout (server may be tarpitting)"
             except ConnectionRefusedError:
                 logger.warning("Port 25 connection refused on %s", mx.host)
                 mx.starttls = None
                 mx.starttls_note = "Port 25 refused"
-                all_ok = False
             except OSError as e:
                 logger.warning("STARTTLS check error for %s: %s", mx.host, e)
                 mx.starttls = None
                 mx.starttls_note = str(e)
-                all_ok = False
             except Exception as e:
                 logger.error("Unexpected STARTTLS error for %s: %s", mx.host, e)
                 mx.starttls = None
                 mx.starttls_note = str(e)
-                all_ok = False
 
-        self.all_starttls = all_ok if self.records else None
+        # Three-state aggregation:
+        #   True  — all checked hosts advertise STARTTLS
+        #   False — at least one host definitively does NOT support STARTTLS
+        #   None  — could not determine (all were timeouts/errors, or no records)
+        checked = [mx for mx in self.records if not mx.is_null_mx]
+        if not checked:
+            self.all_starttls = None
+        elif any(mx.starttls is False for mx in checked):
+            self.all_starttls = False
+        elif all(mx.starttls is True for mx in checked):
+            self.all_starttls = True
+        else:
+            self.all_starttls = None
 
     def _check_ptr(self):
         """Check reverse DNS (PTR) and FCrDNS for each MX host.
