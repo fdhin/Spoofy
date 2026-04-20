@@ -6,44 +6,103 @@ import binascii
 import logging
 import re
 import requests
+from datetime import datetime
 
 from .txt_utils import parse_txt_record
 
 logger = logging.getLogger("spoofyvibe.dkim")
 
-# Common DKIM selectors to brute-force via DNS
-COMMON_SELECTORS = [
-    # Generic
-    "default", "dkim", "mail", "email", "k1", "k2", "k3", "s1", "s2",
-    # Microsoft 365
+# ---------------------------------------------------------------------------
+# Curated DKIM selector dictionary.
+#
+# ONLY contains selectors that are universally deployed vendor defaults or
+# widely documented constants. Entries that depend on tenant-specific IDs,
+# customer-chosen names, or randomized tokens are intentionally excluded
+# (e.g. Amazon SES, HubSpot, Proofpoint, Mimecast) because they cannot be
+# discovered by static brute-forcing.  See _generate_dynamic_selectors()
+# for algorithmic pattern generation.
+# ---------------------------------------------------------------------------
+STATIC_SELECTORS = [
+    # ── Generic / self-hosted ──────────────────────────────────────────
+    "default", "dkim", "mail", "email",
+    "k1", "k2", "k3",
+    "s1", "s2",
+    "key1", "key2",
+
+    # ── Microsoft 365 (rigid CNAME delegation, highly predictable) ────
     "selector1", "selector2",
-    # Google Workspace
-    "google", "20161025", "20230601",
-    # Proofpoint
-    "proofpoint", "ppk1", "ppk2",
-    # Mimecast
-    "mimecast", "mimecast20190104",
-    # Mailchimp / Mandrill
-    "mandrill",
-    # SendGrid
-    "smtpapi",
-    # Mailgun
+
+    # ── Google Workspace (brand default + date-based rotation) ────────
+    "google",
+
+    # ── Mailgun ────────────────────────────────────────────────────────
     "mailo", "mg", "smtp",
-    # Zendesk
+
+    # ── Zendesk (numerically iterated corporate prefix) ───────────────
     "zendesk1", "zendesk2",
-    # Postmark
+
+    # ── Postmark ───────────────────────────────────────────────────────
     "pm",
-    # Everylytic
-    "everlytickey1", "everlytickey2", "eversrv",
-    # Salesforce
-    "sf1", "sf2", "salesforce", "salesforce1",
-    # HubSpot
-    "hs1", "hs2", "hubspot",
-    # Fastmail
+
+    # ── Fastmail (mandatory three-record CNAME framework) ─────────────
     "fm1", "fm2", "fm3",
-    # Amazon SES — real selectors are per-customer random strings, not guessable
-    "amazonses",
+
+    # ── Mailchimp / Mandrill (legacy but widely active) ───────────────
+    "mandrill",
+
+    # ── Salesforce Core CRM ───────────────────────────────────────────
+    "sf1", "sf2", "salesforce", "salesforce1",
+
+    # ── Salesforce Marketing Cloud (independent numeric taxonomy) ─────
+    "200608", "10dkim1", "11dkim1", "12dkim1", "13dkim1",
+    "50dkim1", "51dkim1",
+
+    # ── Klaviyo ────────────────────────────────────────────────────────
+    "kl", "kl2",
+
+    # ── ActiveCampaign ─────────────────────────────────────────────────
+    "dk", "acmail", "activecampaign",
+
+    # ── Adobe Marketo Engage ──────────────────────────────────────────
+    "m1", "m2", "a1", "mkto",
+
+    # ── Campaign Monitor ──────────────────────────────────────────────
+    "cm", "cm1", "cm2",
+
+    # ── Constant Contact ──────────────────────────────────────────────
+    "ctct1", "ctct2",
+
+    # ── Brevo (formerly Sendinblue) ───────────────────────────────────
+    "sib2k",
+
+    # ── SparkPost (semi-algorithmic scph prefix) ──────────────────────
+    "scph0421", "scph0850a",
+
+    # ── Apple iCloud Custom Domains ───────────────────────────────────
+    "sig1", "apple",
+
+    # ── Yahoo Mail ────────────────────────────────────────────────────
+    "yahoo",
+
+    # ── Zoho Mail (rigid standardization for all tenants) ─────────────
+    "zoho",
+
+    # ── ProtonMail ────────────────────────────────────────────────────
+    "protonmail",
+
+    # ── Acoustic / IBM Watson ─────────────────────────────────────────
+    "spop1024",
+
+    # ── AWeber (three-tier rotational delegation) ─────────────────────
+    "aweber_key_a", "aweber_key_b", "aweber_key_c",
+
+    # ── Everylytic (legacy; eversrv deprecated but retained for audit) ─
+    "everlytickey1", "everlytickey2", "eversrv",
 ]
+
+# Prefixes used by the dynamic generator for temporal and numeric patterns.
+_DYNAMIC_PREFIXES = ["", "s", "k", "key", "dkim", "selector", "mail"]
+_DYNAMIC_YEAR_RANGE_START = 2015
 
 
 def _get_exact_key_size(der_bytes):
@@ -358,19 +417,63 @@ class DKIM:
         except (KeyError, ValueError, TypeError) as e:
             logger.debug("DKIM API response parse error for %s: %s", self.domain, e)
 
+    @staticmethod
+    def _generate_dynamic_selectors():
+        """Algorithmically generate high-probability DKIM selectors.
+
+        Targets two prevalent naming patterns that bypass static dictionaries:
+
+        1. **Temporal (year-based):**  Administrators and platforms frequently
+           embed the key's creation year into the selector for lifecycle
+           tracking. Generates combinations of common prefixes with years
+           from 2015 through the current year.  (e.g. s2023, dkim2024, 20230601)
+
+        2. **Numeric iteration:**  Manual key rotation schemes commonly
+           append sequential numbers to a base prefix.
+           (e.g. s3, s4, key1, key2, selector3, selector4, selector5)
+
+        Returns a list of generated selector strings (deduplicated against
+        STATIC_SELECTORS at the call site).
+        """
+        generated = []
+        current_year = datetime.now().year
+
+        # Temporal combinations: prefix + year
+        for year in range(_DYNAMIC_YEAR_RANGE_START, current_year + 1):
+            for prefix in _DYNAMIC_PREFIXES:
+                generated.append(f"{prefix}{year}")
+
+        # Numeric iterations: prefix + 1..5
+        for n in range(1, 6):
+            for prefix in _DYNAMIC_PREFIXES:
+                if prefix:  # skip bare numbers — they overlap with years
+                    generated.append(f"{prefix}{n}")
+
+        return generated
+
     def _brute_force_dns(self):
-        """Try common DKIM selectors via direct DNS lookups.
+        """Try DKIM selectors via direct DNS lookups.
+
+        Combines the curated STATIC_SELECTORS dictionary with dynamically
+        generated temporal and numeric patterns.  All candidates are
+        deduplicated before querying to avoid redundant DNS traffic.
 
         Handles both direct TXT records and CNAME-based selectors (e.g. M365
         uses CNAME records like selector1._domainkey.example.com pointing to
         selector1-example-com._domainkey.example.onmicrosoft.com).
         """
         known_selectors = {s.selector for s in self.selectors}
+
+        # Build deduplicated candidate set: static + dynamic
+        candidates = list(dict.fromkeys(
+            STATIC_SELECTORS + self._generate_dynamic_selectors()
+        ))
+
         resolver = dns.resolver.Resolver()
         if self.dns_server:
             resolver.nameservers = [self.dns_server]
 
-        for selector in COMMON_SELECTORS:
+        for selector in candidates:
             if selector in known_selectors:
                 continue
             qname = f"{selector}._domainkey.{self.domain}"
@@ -389,8 +492,9 @@ class DKIM:
                 logger.debug("DNS brute-force found DKIM selector: %s for %s",
                              selector, self.domain)
 
-        logger.debug("Total DKIM selectors for %s after brute-force: %d",
-                     self.domain, len(self.selectors))
+        logger.debug("Total DKIM selectors for %s after brute-force: %d "
+                     "(from %d candidates)",
+                     self.domain, len(self.selectors), len(candidates))
 
     # Regex pre-filter for DKIM TXT record detection.
     # Matches either "v=DKIM1" at the start (with optional FWS around "=")

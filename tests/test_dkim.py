@@ -388,5 +388,76 @@ class TestDKIMIsUsable(unittest.TestCase):
         self.assertFalse(sel.is_usable)
 
 
+class TestDKIMSelectorDictionary(unittest.TestCase):
+    """Test the curated STATIC_SELECTORS and dynamic generator."""
+
+    def test_hallucinated_selectors_removed(self):
+        """Selectors for tenant-specific platforms must not be in the static list."""
+        from modules.dkim import STATIC_SELECTORS
+        hallucinated = {"amazonses", "hubspot", "hs1", "hs2",
+                        "proofpoint", "ppk1", "ppk2",
+                        "mimecast", "mimecast20190104", "smtpapi"}
+        present = hallucinated & set(STATIC_SELECTORS)
+        self.assertEqual(present, set(),
+                         f"Hallucinated selectors still present: {present}")
+
+    def test_documented_vendor_selectors_present(self):
+        """Key documented vendor defaults must be in the static list."""
+        from modules.dkim import STATIC_SELECTORS
+        required = {
+            # Core
+            "default", "selector1", "selector2", "google",
+            # Marketing/ESP
+            "kl", "kl2", "dk", "acmail", "mkto", "cm", "ctct1", "ctct2",
+            "10dkim1", "sib2k", "scph0421",
+            # Consumer
+            "sig1", "apple", "yahoo", "zoho", "protonmail",
+            # Enterprise
+            "spop1024", "aweber_key_a",
+        }
+        missing = required - set(STATIC_SELECTORS)
+        self.assertEqual(missing, set(),
+                         f"Documented selectors missing: {missing}")
+
+    def test_dynamic_generator_produces_temporal_patterns(self):
+        """Dynamic generator must produce year-prefixed selectors."""
+        from modules.dkim import DKIM
+        generated = DKIM._generate_dynamic_selectors()
+        # Must contain current year bare and with common prefixes
+        from datetime import datetime
+        year = str(datetime.now().year)
+        self.assertIn(year, generated)
+        self.assertIn(f"s{year}", generated)
+        self.assertIn(f"dkim{year}", generated)
+
+    def test_dynamic_generator_produces_numeric_patterns(self):
+        """Dynamic generator must produce numbered selector patterns."""
+        from modules.dkim import DKIM
+        generated = DKIM._generate_dynamic_selectors()
+        # Must contain prefix+number combinations
+        self.assertIn("s3", generated)
+        self.assertIn("key4", generated)
+        self.assertIn("selector5", generated)
+
+    def test_dynamic_generator_no_bare_numbers(self):
+        """Bare single-digit numbers (1, 2, 3..) should not be generated
+        as they overlap with year generation and are not useful selectors."""
+        from modules.dkim import DKIM
+        generated = DKIM._generate_dynamic_selectors()
+        bare_digits = [s for s in generated if s.isdigit() and len(s) == 1]
+        self.assertEqual(bare_digits, [],
+                         f"Bare single-digit numbers found: {bare_digits}")
+
+    def test_combined_payload_has_no_duplicates(self):
+        """The combined static + dynamic payload should have no duplicates
+        after dict.fromkeys deduplication."""
+        from modules.dkim import STATIC_SELECTORS, DKIM
+        combined = list(dict.fromkeys(
+            STATIC_SELECTORS + DKIM._generate_dynamic_selectors()
+        ))
+        self.assertEqual(len(combined), len(set(combined)),
+                         "Duplicate selectors found in combined payload")
+
+
 if __name__ == "__main__":
     unittest.main()
