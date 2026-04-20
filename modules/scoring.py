@@ -13,6 +13,7 @@ Computes a 0-100 score and A+→F letter grade per domain based on:
   - MTA-STS & TLS-RPT (10 pts)
   - MX infrastructure (7 pts) — STARTTLS portion excluded if not scanned
   - DNSSEC (5 pts)
+  - DANE (5 pts)
 
 When optional scan features (DKIM, STARTTLS) are disabled, the max
 possible score is reduced proportionally. Grade boundaries use the
@@ -72,6 +73,7 @@ class SecurityScore:
         mta_sts_score = self._score_mta_sts()
         mx_score = self._score_mx()
         dnssec_score = self._score_dnssec()
+        dane_score = self._score_dane()
 
         # MX max is 7 normally; STARTTLS contributes 3 of those points.
         # When STARTTLS isn't scanned, reduce MX max by 3.
@@ -88,11 +90,12 @@ class SecurityScore:
             "mta_sts": {"score": mta_sts_score, "max": 10, "details": self._mta_sts_details()},
             "mx": {"score": mx_score, "max": mx_max, "details": self._mx_details()},
             "dnssec": {"score": dnssec_score, "max": 5, "details": self._dnssec_details()},
+            "dane": {"score": dane_score, "max": 5, "details": self._dane_details()},
         }
 
         # Sum only categories that were actually scanned
         total = spf_score + dmarc_score + bimi_score + caa_score
-        total += spoof_score + mta_sts_score + mx_score + dnssec_score
+        total += spoof_score + mta_sts_score + mx_score + dnssec_score + dane_score
         if dkim_score is not None:
             total += dkim_score
 
@@ -378,7 +381,11 @@ class SecurityScore:
 
         # Full chain of trust: DNSKEY + DS (+2)
         if enabled:
-            score += 2
+            # Penalize deprecated cryptography (e.g. SHA-1) per RFC 9904
+            if self.result.get("DNSSEC_HAS_WEAK_DNSKEY") or self.result.get("DNSSEC_HAS_WEAK_DS"):
+                score += 1
+            else:
+                score += 2
 
         # AD flag validated by recursive resolver (+2)
         if ad_flag:
@@ -736,6 +743,8 @@ class SecurityScore:
         ad_flag = self.result.get("DNSSEC_AD_FLAG", False)
         key_count = self.result.get("DNSSEC_KEY_COUNT", 0)
         has_dane = self.result.get("DANE_HAS_TLSA", False)
+        has_weak_dnskey = self.result.get("DNSSEC_HAS_WEAK_DNSKEY", False)
+        has_weak_ds = self.result.get("DNSSEC_HAS_WEAK_DS", False)
 
         if not dnskey_present and not has_ds:
             details.append(("⚠️", "DNSSEC is not enabled"))
@@ -749,14 +758,86 @@ class SecurityScore:
         elif dnskey_present and not has_ds:
             details.append(("❌", f"DNSSEC broken — {key_count} DNSKEY record(s) but no DS in parent zone"))
             details.append(("❌", "Chain of trust is incomplete — validating resolvers will NOT trust this zone"))
+        elif has_ds and not dnskey_present:
+            details.append(("❌", "CRITICAL OUTAGE: DS record exists but no valid DNSKEY found!"))
+            details.append(("❌", "Validating resolvers (1.1.1.1, 8.8.8.8) will return SERVFAIL and block all access to your domain."))
+
+        # RFC 9904: Flag weak/deprecated cryptographic algorithms
+        if has_weak_dnskey:
+            details.append(("❌", "DNSKEY uses a deprecated algorithm (RFC 9904) — vulnerable to cryptographic attacks"))
+        if has_weak_ds:
+            details.append(("❌", "DS record uses a weak digest type (e.g. SHA-1) — RFC 9904 MUST NOT for delegation"))
 
         if ad_flag:
             details.append(("✅", "AD flag validated — recursive resolver confirms DNSSEC chain"))
         elif enabled:
             details.append(("⚠️", "AD flag not set — DNSSEC may not be fully operational"))
 
-        if has_dane and not enabled:
-            details.append(("❌", "DANE TLSA records exist but DNSSEC chain is broken — TLSA is trivially spoofable"))
+        return details
+
+    def _score_dane(self):
+        """Score DANE configuration (0-5 points)."""
+        if self.result.get("MX_HAS_NULL_MX", False):
+            return 5  # Exempt parked domains
+
+        score = 0
+        has_tlsa = self.result.get("DANE_HAS_TLSA", False)
+        is_secure = self.result.get("DANE_IS_SECURE", False)
+        has_bogus = self.result.get("DANE_HAS_BOGUS_RECORDS", False)
+        dnssec_enabled = self.result.get("DNSSEC_ENABLED", False)
+
+        if has_bogus:
+            return 0  # Severe penalty for bogus records
+        if not has_tlsa:
+            return 0
+
+        score += 2  # TLSA records exist
+        if is_secure:
+            score += 2  # AD flag present on TLSA
+        if dnssec_enabled:
+            score += 1  # Origin domain DNSSEC (RFC 7672 compliance)
+
+        return min(score, 5)
+
+    def _dane_details(self):
+        """Return detail items for DANE scoring."""
+        details = []
+
+        if self.result.get("MX_HAS_NULL_MX", False):
+            details.append(("✅", "Null MX detected — DANE/TLSA is not required for parked domains"))
+            return details
+
+        has_tlsa = self.result.get("DANE_HAS_TLSA", False)
+        is_secure = self.result.get("DANE_IS_SECURE", False)
+        has_bogus = self.result.get("DANE_HAS_BOGUS_RECORDS", False)
+        dnssec_enabled = self.result.get("DNSSEC_ENABLED", False)
+        has_unsupported = self.result.get("DANE_HAS_UNSUPPORTED_RECORDS", False)
+        dane_mx_count = self.result.get("DANE_MX_COUNT", 0)
+        total_mx = self.result.get("DANE_TOTAL_MX", 0)
+
+        # Bogus check MUST be first — can be True even when has_tlsa is False
+        # (the "empty TLSA but SERVFAIL" scenario).
+        if has_bogus:
+            details.append(("❌", "CRITICAL: DNSSEC validation for TLSA queries is BOGUS (SERVFAIL)"))
+            details.append(("❌", "MTAs will abort TLS connections and drop your mail!"))
+            return details
+
+        if not has_tlsa:
+            details.append(("⚠️", "No DANE/TLSA records found for MX hosts"))
+            return details
+
+        if has_unsupported:
+            details.append(("⚠️", "Some TLSA records contain unsupported parameters and are unusable"))
+
+        if is_secure:
+            details.append(("✅", f"TLSA records validated via DNSSEC ({dane_mx_count}/{total_mx} MX hosts)"))
+        else:
+            details.append(("❌", "TLSA records exist but are not secured by DNSSEC (AD flag missing)"))
+
+        if not dnssec_enabled:
+            details.append(("❌", "Origin domain lacks DNSSEC — per RFC 7672 §3.1.3, MTAs will ignore DANE because the MX delegation is insecure"))
+        elif is_secure:
+            details.append(("✅", "Origin domain has DNSSEC — MX delegation is secure and DANE is fully active"))
 
         return details
 

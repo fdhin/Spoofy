@@ -268,8 +268,14 @@ def printer(**kwargs):
 
     # DANE
     dane_has_tlsa = kwargs.get("DANE_HAS_TLSA", False)
-    if dane_has_tlsa:
-        output_message("[+]", f"DANE: {kwargs.get('DANE_MX_COUNT', 0)}/{kwargs.get('DANE_TOTAL_MX', 0)} MX hosts have TLSA records", "good")
+    dane_is_secure = kwargs.get("DANE_IS_SECURE", False)
+    if dane_is_secure:
+        output_message("[+]", f"DANE: {kwargs.get('DANE_MX_COUNT', 0)}/{kwargs.get('DANE_TOTAL_MX', 0)} MX hosts have secure TLSA records", "good")
+    elif dane_has_tlsa:
+        if kwargs.get("DANE_HAS_BOGUS_RECORDS", False):
+            output_message("[-]", "DANE: TLSA records exist but DNSSEC validation is BOGUS (SERVFAIL)", "bad")
+        else:
+            output_message("[?]", "DANE: TLSA records found but not DNSSEC-validated (AD flag absent)", "warning")
 
     # CAA
     caa_issue = kwargs.get("CAA_ISSUE")
@@ -285,8 +291,15 @@ def printer(**kwargs):
         output_message("[*]", f"MX: {mx_count} record(s) — {', '.join(mx_providers) if mx_providers else 'Unknown'}", "info")
 
     if spoofing_type:
-        level = "good" if spoofable else "bad"
-        symbol = "[+]" if level == "good" else "[-]"
+        if spoofable is True:
+            level = "bad"
+            symbol = "[-]"
+        elif spoofable is False:
+            level = "good"
+            symbol = "[+]"
+        else:
+            level = "warning"  # None = mailbox-dependent
+            symbol = "[?]"
         output_message(symbol, spoofing_type, level)
 
     # Remediation summary in stdout

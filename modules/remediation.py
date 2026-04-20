@@ -737,6 +737,12 @@ class RemediationEngine:
 
     def _check_mta_sts(self):
         recs = []
+
+        # Null MX (RFC 7505): domain intentionally receives no email.
+        # MTA-STS and TLS-RPT are inapplicable — skip all recommendations.
+        if self.result.get("MX_HAS_NULL_MX", False):
+            return recs
+
         mta_sts_txt = self.result.get("MTA_STS_TXT")
         mta_sts_mode = self.result.get("MTA_STS_MODE")
         max_age = self.result.get("MTA_STS_MAX_AGE")
@@ -936,10 +942,12 @@ class RemediationEngine:
     def _check_dnssec(self):
         recs = []
         domain = self.result.get("DOMAIN", "this domain")
-        enabled = self.result.get("DNSSEC_ENABLED", False)
+        dnskey_present = self.result.get("DNSSEC_DNSKEY_PRESENT", False)
         has_ds = self.result.get("DNSSEC_HAS_DS", False)
+        enabled = self.result.get("DNSSEC_ENABLED", False)
 
-        if not enabled:
+        # State 1: Completely disabled — no DNSKEY, no DS
+        if not dnskey_present and not has_ds:
             recs.append(Recommendation(
                 priority=4,
                 category="DNSSEC",
@@ -962,7 +970,9 @@ class RemediationEngine:
                 ),
                 reference="https://www.icann.org/resources/pages/dnssec-what-is-it-why-is-it-important-2019-03-05-en",
             ))
-        elif not has_ds:
+
+        # State 2: Broken — DNSKEY present but no DS in parent zone
+        elif dnskey_present and not has_ds:
             recs.append(Recommendation(
                 priority=3,
                 category="DNSSEC",
@@ -983,8 +993,65 @@ class RemediationEngine:
                     "zone (e.g. .com). Your DNS provider should provide the DS record "
                     "values to submit to your registrar."
                 ),
-                reference="https://www.cloudflare.com/dns/dnssec/how-dnssec-works/",
+                reference="https://datatracker.ietf.org/doc/html/rfc4035#section-5.2",
             ))
+
+        # State 3: Critical outage — DS exists but no DNSKEY (SERVFAIL)
+        elif has_ds and not dnskey_present:
+            recs.append(Recommendation(
+                priority=1,
+                category="DNSSEC",
+                title="DNSSEC is BROKEN — DS record exists but no valid DNSKEY found",
+                description=(
+                    f"The parent zone requires DNSSEC for {domain} (DS record present), "
+                    "but no valid DNSKEY records were found at the apex."
+                ),
+                impact=(
+                    "CRITICAL OUTAGE: Validating resolvers (like 1.1.1.1 or 8.8.8.8) "
+                    "will return SERVFAIL for all queries. Your domain is completely "
+                    "unreachable for users on strict resolvers."
+                ),
+                fix=(
+                    "Immediately publish the correct DNSKEY records matching your DS "
+                    "record, or remove the DS record from your domain registrar to "
+                    "disable DNSSEC."
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc4035#section-5.2",
+            ))
+
+        # RFC 9904: Warn about deprecated cryptographic algorithms
+        if enabled:
+            has_weak_dnskey = self.result.get("DNSSEC_HAS_WEAK_DNSKEY", False)
+            has_weak_ds = self.result.get("DNSSEC_HAS_WEAK_DS", False)
+            if has_weak_dnskey or has_weak_ds:
+                weak_parts = []
+                if has_weak_dnskey:
+                    weak_parts.append("DNSKEY algorithm")
+                if has_weak_ds:
+                    weak_parts.append("DS digest type (e.g. SHA-1)")
+                recs.append(Recommendation(
+                    priority=3,
+                    category="DNSSEC",
+                    title="DNSSEC uses deprecated cryptography (RFC 9904)",
+                    description=(
+                        f"The domain {domain} has DNSSEC enabled but uses deprecated "
+                        f"cryptographic primitives: {', '.join(weak_parts)}. "
+                        "RFC 9904 classifies these as MUST NOT or NOT RECOMMENDED."
+                    ),
+                    impact=(
+                        "Deprecated algorithms like SHA-1 and RSAMD5 are vulnerable to "
+                        "collision and pre-image attacks. An attacker could forge DS records "
+                        "or DNSKEY signatures, undermining the entire DNSSEC chain of trust."
+                    ),
+                    fix=(
+                        "Rotate to modern DNSSEC algorithms:\n"
+                        "  • DNSKEY: Use Algorithm 13 (ECDSAP256SHA256) or 15 (Ed25519)\n"
+                        "  • DS Digest: Use Digest Type 2 (SHA-256) or 4 (SHA-384)\n\n"
+                        "Most DNS providers handle this automatically when you regenerate "
+                        "DNSSEC keys. After rotation, update the DS record at your registrar."
+                    ),
+                    reference="https://datatracker.ietf.org/doc/html/rfc9904",
+                ))
 
         return recs
 
@@ -992,33 +1059,142 @@ class RemediationEngine:
 
     def _check_dane(self):
         recs = []
+
+        # Null MX (RFC 7505): domain intentionally receives no email.
+        # DANE/TLSA is inapplicable — skip all recommendations.
+        if self.result.get("MX_HAS_NULL_MX", False):
+            return recs
+
         domain = self.result.get("DOMAIN", "this domain")
         dnssec_enabled = self.result.get("DNSSEC_ENABLED", False)
         has_tlsa = self.result.get("DANE_HAS_TLSA", False)
         dane_mx_count = self.result.get("DANE_MX_COUNT", 0)
         total_mx = self.result.get("DANE_TOTAL_MX", 0)
+        has_bogus = self.result.get("DANE_HAS_BOGUS_RECORDS", False)
+        has_unsupported = self.result.get("DANE_HAS_UNSUPPORTED_RECORDS", False)
 
-        if has_tlsa and dane_mx_count < total_mx:
+        # RFC 7672 §3.1.3: Bogus DNSSEC = SERVFAIL = MTAs MUST abort connection.
+        # This takes precedence regardless of whether TLSA records exist —
+        # a broken NSEC/NSEC3 denial-of-existence proof triggers SERVFAIL too.
+        if has_bogus:
+            recs.append(Recommendation(
+                priority=1,
+                category="DANE",
+                title="CRITICAL: DNSSEC validation for TLSA queries is BOGUS (SERVFAIL)",
+                description=(
+                    f"One or more MX hosts for {domain} returned a BOGUS (SERVFAIL) "
+                    "response during DNSSEC validation of the TLSA query."
+                ),
+                impact=(
+                    "Per RFC 7672 §3.1.3, DANE-aware MTAs (like Gmail and Outlook) "
+                    "MUST abort the TLS connection when DNSSEC validation is bogus, "
+                    "even if no TLSA records exist. Inbound email is being dropped "
+                    "entirely by strict senders."
+                ),
+                fix=(
+                    "Immediately fix the DNSSEC configuration for the affected MX "
+                    "host. Check for expired RRSIG signatures or mismatched "
+                    "DS/DNSKEY records."
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc7672#section-3.1.3",
+            ))
+
+        # RFC 6698 §4.1: Unsupported parameters make records unusable
+        if has_unsupported:
+            recs.append(Recommendation(
+                priority=2,
+                category="DANE",
+                title="DANE/TLSA records contain unsupported or malformed parameters",
+                description=(
+                    f"One or more TLSA records for MX hosts of {domain} contain "
+                    "an unrecognized Usage, Selector, Matching Type, or an invalid "
+                    "hash length."
+                ),
+                impact=(
+                    "Per RFC 6698 §4.1, records with unrecognized parameters MUST "
+                    "be considered 'unusable'. DANE-aware MTAs will ignore these records."
+                ),
+                fix=(
+                    "Review your TLSA records and ensure: Usage is 0-3, Selector is "
+                    "0-1, Matching Type is 0-2, and hash lengths match their algorithm "
+                    "(32 bytes for SHA-256, 64 bytes for SHA-512)."
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc6698#section-4.1",
+            ))
+
+        is_secure = self.result.get("DANE_IS_SECURE", False)
+
+        # MX host's DNSSEC is missing (no AD flag) — TLSA records exist but unusable
+        if has_tlsa and not is_secure and not has_bogus and not has_unsupported:
+            recs.append(Recommendation(
+                priority=3,
+                category="DANE",
+                title="DANE/TLSA records published but MX host zone lacks DNSSEC",
+                description=(
+                    f"TLSA records were found for the MX hosts of {domain}, but "
+                    "the MX host's DNS zone is not secured with DNSSEC (AD flag "
+                    "missing on the TLSA response)."
+                ),
+                impact=(
+                    "Per RFC 6698 §4.1, TLSA records MUST be secured by DNSSEC. "
+                    "Without it, receiving MTAs will consider your TLSA records "
+                    "'unusable'."
+                ),
+                fix=(
+                    "Enable DNSSEC on the DNS zone hosting your MX records, or "
+                    "remove the ineffective TLSA records."
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc6698#section-4.1",
+            ))
+
+        # RFC 7672 §3.1.3: Origin domain lacks DNSSEC → MX delegation insecure
+        # Attackers can spoof MX records, routing mail to an unencrypted server
+        # and completely bypassing DANE on the real MX host.
+        if has_tlsa and is_secure and not dnssec_enabled:
+            recs.append(Recommendation(
+                priority=2,
+                category="DANE",
+                title="DANE is bypassable — your domain lacks DNSSEC",
+                description=(
+                    f"Secure TLSA records were found for the MX hosts of {domain}, "
+                    f"but {domain} itself does not have DNSSEC enabled. The TLSA "
+                    "records are likely published by your email provider (e.g. "
+                    "Google, Microsoft), not by you."
+                ),
+                impact=(
+                    "Per RFC 7672 §3.1.3, DANE requires your domain's MX records to "
+                    "be authenticated by DNSSEC. Because your domain lacks DNSSEC, an "
+                    "attacker can spoof your MX records and route mail to an unencrypted "
+                    "server, completely bypassing the DANE protection on the real MX host."
+                ),
+                fix=(
+                    "Enable DNSSEC for your domain at your DNS provider and publish "
+                    "the DS record at your registrar."
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc7672#section-3.1.3",
+            ))
+
+        # Partial TLSA coverage
+        if has_tlsa and is_secure and dane_mx_count < total_mx:
             recs.append(Recommendation(
                 priority=5,
                 category="DANE",
                 title="DANE/TLSA only covers some MX hosts",
                 description=(
                     f"Only {dane_mx_count} of {total_mx} MX hosts for {domain} "
-                    "have TLSA records. For full DANE protection, all MX hosts "
-                    "should have published TLSA records."
+                    "have secure TLSA records."
                 ),
                 impact=(
                     "MX hosts without TLSA records can still be targeted by "
-                    "man-in-the-middle attacks, even if other MX hosts are protected."
+                    "man-in-the-middle attacks."
                 ),
                 fix=(
-                    "Publish TLSA records for all MX hosts at _25._tcp.<mx-host>. "
-                    "Use usage=3 (DANE-EE) and selector=1 (SPKI) with SHA-256 "
-                    "matching for the best compatibility."
+                    "Publish TLSA records for all MX hosts at _25._tcp.<mx-host>."
                 ),
                 reference="https://datatracker.ietf.org/doc/html/rfc7672",
             ))
+
+        # No DANE at all — only suggest if DNSSEC is active
         elif not has_tlsa and dnssec_enabled:
             recs.append(Recommendation(
                 priority=5,
@@ -1027,13 +1203,12 @@ class RemediationEngine:
                 description=(
                     f"DNSSEC is enabled for {domain} but no DANE/TLSA records "
                     "were found. DANE uses TLSA records to cryptographically "
-                    "bind TLS certificates to DNS, preventing certificate-based "
-                    "MITM attacks on mail delivery."
+                    "bind TLS certificates to DNS."
                 ),
                 impact=(
                     "Without DANE, mail delivery relies solely on the CA system "
-                    "for TLS certificate validation, which is more susceptible "
-                    "to compromise or misissuance."
+                    "for TLS certificate validation, which is susceptible to "
+                    "compromise or misissuance."
                 ),
                 fix=(
                     "Publish TLSA records at _25._tcp.<mx-host> for each MX server. "

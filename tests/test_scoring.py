@@ -96,9 +96,16 @@ class TestSecurityScore(unittest.TestCase):
             DNSSEC_HAS_DS=True,
             DNSSEC_AD_FLAG=True,
             DNSSEC_KEY_COUNT=3,
+            # DANE: secure TLSA with AD flag + origin DNSSEC
+            DANE_HAS_TLSA=True,
+            DANE_IS_SECURE=True,
+            DANE_MX_COUNT=2,
+            DANE_TOTAL_MX=2,
+            DANE_HAS_BOGUS_RECORDS=False,
+            DANE_HAS_UNSUPPORTED_RECORDS=False,
         )
         score = SecurityScore(result)
-        self.assertEqual(score.score, 100)
+        self.assertEqual(score.score, 105)
         self.assertEqual(score.grade, "A+")
 
     def test_no_records_gets_f(self):
@@ -241,18 +248,19 @@ class TestSecurityScore(unittest.TestCase):
         """Test various score → grade mappings."""
         result = self._make_result()
         score = SecurityScore(result)
-        # Manually test grade calculation
-        score.score = 97
+        # Grade boundaries are percentage-based: score / max_score * 100
+        # With max_score=105:
+        score.score = 100  # 95.2% → A+
         self.assertEqual(score._calculate_grade(), "A+")
-        score.score = 92
+        score.score = 95   # 90.5% → A
         self.assertEqual(score._calculate_grade(), "A")
-        score.score = 82
+        score.score = 85   # 80.9% → B+
         self.assertEqual(score._calculate_grade(), "B+")
-        score.score = 72
+        score.score = 75   # 71.4% → B-
         self.assertEqual(score._calculate_grade(), "B-")
-        score.score = 55
+        score.score = 58   # 55.2% → C-
         self.assertEqual(score._calculate_grade(), "C-")
-        score.score = 30
+        score.score = 30   # 28.6% → F
         self.assertEqual(score._calculate_grade(), "F")
 
     def test_bimi_with_authority_scores_full(self):
@@ -325,10 +333,10 @@ class TestSecurityScore(unittest.TestCase):
         self.assertEqual(len(pct_warnings), 0, "Should not warn when pct=100")
 
     def test_breakdown_has_all_categories(self):
-        """Score breakdown includes all 8 categories."""
+        """Score breakdown includes all 10 categories."""
         result = self._make_result()
         score = SecurityScore(result)
-        expected_cats = {"spf", "dmarc", "dkim", "bimi", "spoofability", "mta_sts", "mx", "dnssec", "caa"}
+        expected_cats = {"spf", "dmarc", "dkim", "bimi", "spoofability", "mta_sts", "mx", "dnssec", "dane", "caa"}
         self.assertEqual(set(score.breakdown.keys()), expected_cats)
 
 
@@ -356,7 +364,7 @@ class TestSecurityScoreStr(unittest.TestCase):
         score = SecurityScore(result)
         output = str(score)
         self.assertIn("Security Score:", output)
-        self.assertIn("/100", output)
+        self.assertIn("/105", output)
 
 
 if __name__ == "__main__":
