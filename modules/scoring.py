@@ -103,16 +103,23 @@ class SecurityScore:
     def _score_spf(self):
         """Score SPF configuration (0-16 points).
 
-        Per RFC 7208, exceeding 10 DNS lookups causes a PermError.
-        Receiving MTAs abort the SPF check entirely, so a record with
-        >10 lookups provides zero protection despite existing.
+        Per RFC 7208:
+        - §4.5: Multiple SPF records cause PermError (hard-cap at 0).
+        - §4.6.4: Exceeding 10 DNS lookups causes PermError (hard-cap at 5,
+          record exists but provides no protection).
         """
         score = 0
         spf = self.result.get("SPF")
         spf_all = self.result.get("SPF_MULTIPLE_ALLS")
         too_many = self.result.get("SPF_TOO_MANY_DNS_QUERIES", False)
+        permerror = self.result.get("SPF_PERMERROR", False)
 
         if not spf:
+            return 0
+
+        # RFC 7208 §4.5: multiple SPF records = PermError.
+        # MTAs abort before even reading the record. Zero protection.
+        if permerror:
             return 0
 
         # Record exists (+5)
@@ -399,12 +406,20 @@ class SecurityScore:
         spf = self.result.get("SPF")
         spf_all = self.result.get("SPF_MULTIPLE_ALLS")
         too_many = self.result.get("SPF_TOO_MANY_DNS_QUERIES", False)
+        permerror = self.result.get("SPF_PERMERROR", False)
 
         if not spf:
             details.append(("❌", "No SPF record found"))
             return details
 
         details.append(("✅", "SPF record exists"))
+
+        # PermError from multiple records overrides everything
+        if permerror:
+            details.append(("❌", "CRITICAL: Multiple SPF records published — "
+                           "MTAs return PermError and abort SPF evaluation "
+                           "(RFC 7208 §4.5)"))
+            return details
 
         if spf.strip().lower().startswith("v=spf1"):
             details.append(("✅", "Valid SPF syntax"))

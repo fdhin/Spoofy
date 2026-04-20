@@ -143,6 +143,44 @@ class RemediationEngine:
             )
             return recs
 
+        # RFC 7208 §4.5: Multiple SPF records = PermError
+        permerror = self.result.get("SPF_PERMERROR", False)
+        if permerror:
+            recs.append(
+                Recommendation(
+                    priority=1,
+                    category="SPF",
+                    title="Multiple SPF records cause PermError",
+                    description=(
+                        f"The domain {self.domain} has more than one TXT record beginning with "
+                        "'v=spf1'. Per RFC 7208 §4.5, receiving MTAs MUST abort the SPF check "
+                        "and return a PermError when multiple SPF records are found."
+                    ),
+                    impact=(
+                        "Your domain's SPF provides ZERO protection. All receiving MTAs will "
+                        "abort the SPF evaluation before reading any of the records. This is "
+                        "functionally worse than having no SPF record at all."
+                    ),
+                    fix=(
+                        "Consolidate all SPF directives into a single TXT record. "
+                        "Only one record beginning with 'v=spf1' may exist per domain.\n\n"
+                        "If you have multiple email providers, combine them with 'include:' "
+                        "directives in a single record:\n\n"
+                        f'{self.domain}.  IN  TXT  "v=spf1 include:provider1 include:provider2 -all"'
+                    ),
+                    reference="https://datatracker.ietf.org/doc/html/rfc7208#section-4.5",
+                    eli5_explanation=(
+                        "Imagine two bouncers at your party with different guest lists. "
+                        "They start arguing and give up — everyone gets turned away."
+                    ),
+                    business_risk=(
+                        "All legitimate email from your domain may be rejected or marked as spam "
+                        "by receiving mail servers."
+                    ),
+                )
+            )
+            return recs
+
         if spf_all == "+all":
             recs.append(
                 Recommendation(

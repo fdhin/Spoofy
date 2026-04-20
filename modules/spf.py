@@ -36,13 +36,16 @@ class SPF:
     def __init__(self, domain, dns_server=None):
         self.domain = domain
         self.dns_server = dns_server
-        self.spf_record = self.get_spf_record()
+        self.spf_record = None
         self.all_mechanism = None
         self.spf_dns_query_count = 0
         self.too_many_dns_queries = False
         self.spf_macros = []
+        self.spf_permerror = False  # RFC 7208 §4.5: multiple records = PermError
 
-        if self.spf_record:
+        self.spf_record = self.get_spf_record()
+
+        if self.spf_record and not self.spf_permerror:
             self.all_mechanism = self.get_spf_all_string()
             self.spf_dns_query_count = self.get_spf_dns_queries()
             self.too_many_dns_queries = self.spf_dns_query_count > 10
@@ -59,7 +62,14 @@ class SPF:
         return list(set(macros))
 
     def get_spf_record(self, domain=None):
-        """Fetches the SPF record for the specified domain."""
+        """Fetches the SPF record for the specified domain.
+
+        Per RFC 7208 §4.5, if the DNS lookup returns more than one TXT
+        record beginning with 'v=spf1', the check_host() evaluation MUST
+        abort and return a PermError.  We detect this condition and set
+        self.spf_permerror = True.  The first record is still returned
+        for display/reporting purposes, but downstream analysis is skipped.
+        """
         try:
             if not domain:
                 domain = self.domain
@@ -68,12 +78,29 @@ class SPF:
             resolver.nameservers = [ns for ns in [self.dns_server, "1.1.1.1", "8.8.8.8"] if ns]
             logger.debug("Querying SPF for %s", domain)
             query_result = resolver.resolve(domain, "TXT")
+
+            # Collect ALL records starting with v=spf1
+            spf_records = []
             for record in query_result:
                 txt = parse_txt_record(record)
-                # RFC 7208 §4.5: SPF record begins with "v=spf1"
                 if txt.strip().lower().startswith("v=spf1"):
-                    logger.debug("Found SPF for %s: %s", domain, txt)
-                    return txt
+                    spf_records.append(txt)
+
+            if len(spf_records) > 1:
+                # RFC 7208 §4.5: multiple SPF records = PermError
+                logger.error(
+                    "RFC 7208 §4.5 PermError: %d SPF records found for %s — "
+                    "MTAs will abort SPF evaluation", len(spf_records), domain)
+                # Only flag PermError on the primary domain lookup, not
+                # during include/redirect recursion
+                if domain == self.domain:
+                    self.spf_permerror = True
+                return spf_records[0]  # Return first for display
+
+            if spf_records:
+                logger.debug("Found SPF for %s: %s", domain, spf_records[0])
+                return spf_records[0]
+
             logger.debug("No SPF record found in TXT records for %s", domain)
             return None
         except dns.resolver.NXDOMAIN:

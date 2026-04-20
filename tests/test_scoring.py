@@ -194,6 +194,37 @@ class TestSecurityScore(unittest.TestCase):
         self.assertEqual(score_ok.breakdown["spf"]["score"], 16)
         self.assertEqual(score_bad.breakdown["spf"]["score"], 5)
 
+    def test_spf_permerror_multiple_records_caps_at_zero(self):
+        """SPF with multiple records causes PermError — hard-cap at 0."""
+        result = self._make_result(
+            SPF="v=spf1 -all",
+            SPF_MULTIPLE_ALLS="-all",
+            SPF_PERMERROR=True,
+        )
+        score = SecurityScore(result)
+        self.assertEqual(score.breakdown["spf"]["score"], 0)
+
+    def test_spf_permerror_details_show_critical(self):
+        """SPF PermError details should show critical finding."""
+        result = self._make_result(
+            SPF="v=spf1 -all",
+            SPF_PERMERROR=True,
+        )
+        score = SecurityScore(result)
+        details = score.breakdown["spf"]["details"]
+        critical = [d for d in details if "CRITICAL" in d[1]]
+        self.assertTrue(len(critical) > 0, "Should show CRITICAL PermError finding")
+
+    def test_spf_single_record_no_permerror(self):
+        """A normal single SPF record should not trigger PermError."""
+        result = self._make_result(
+            SPF="v=spf1 -all",
+            SPF_MULTIPLE_ALLS="-all",
+            SPF_PERMERROR=False,
+        )
+        score = SecurityScore(result)
+        self.assertEqual(score.breakdown["spf"]["score"], 16)
+
     def test_to_dict_returns_expected_keys(self):
         """to_dict() should return the expected keys."""
         result = self._make_result()
