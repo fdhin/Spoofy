@@ -10,9 +10,12 @@ RFC 7208 compliance notes:
   - §4.3: IDNA domains encoded to A-labels before DNS queries.
   - §4.5: Version string is case-sensitive, no leading whitespace,
     must be followed by SP or end-of-record.
-  - §4.5: Multiple SPF records trigger PermError.
+  - §4.5: Multiple SPF records trigger PermError (including on
+    include/redirect targets).
   - §4.6.1: Mechanism and modifier names are case-insensitive.
-  - §6.1: Multiple redirect/exp modifiers trigger PermError.
+  - §4.6.1: Modifiers (redirect=, exp=) do NOT take qualifiers.
+  - §5.1: redirect= is ignored when an 'all' mechanism is present.
+  - §6.1: Multiple redirect or exp modifiers trigger PermError.
   - §7: Macros in include/redirect targets are skipped during
     static DNS counting (require runtime IP context).
   - §7.1: Macro letters restricted to: s l o d i p h c r t v.
@@ -61,9 +64,9 @@ def _encode_idna(domain):
             return None
 
 
-# RFC 7208 §7.1: Valid macro letters (case-insensitive in the RFC,
-# but the regex captures the raw letter for reporting).
-_MACRO_RE = re.compile(r'%{([slodiph crtvSLODIPHCRTV])[0-9r]*[.\-+,/_=]*}')
+# RFC 7208 §7.1: Valid macro letters (case-insensitive).
+# Restricted to: s l o d i p h c r t v
+_MACRO_RE = re.compile(r'%{[slodiphcrtvSLODIPHCRTV][0-9r]*[.\-+,/_=]*}')
 
 # SPF qualifier characters per RFC 7208 §4.6.2
 _QUALIFIERS = frozenset("+-~?")
@@ -91,6 +94,17 @@ def _has_macro(target):
     return "%" in target
 
 
+def _record_has_all(spf_record):
+    """Return True if the SPF record contains an 'all' mechanism.
+
+    RFC 7208 §5.1: redirect= MUST be ignored when 'all' is present.
+    """
+    for token in spf_record.split():
+        if token.lower().lstrip("+-~?") == "all":
+            return True
+    return False
+
+
 class SPF:
     def __init__(self, domain, dns_server=None):
         self.domain = domain
@@ -106,9 +120,12 @@ class SPF:
 
         if self.spf_record and not self.spf_permerror:
             self.all_mechanism = self.get_spf_all_string()
-            self.spf_dns_query_count = self.get_spf_dns_queries()
-            self.too_many_dns_queries = self.spf_dns_query_count > 10
-            self.spf_macros = self.get_spf_macros()
+            # Re-check permerror after get_spf_all_string (may detect
+            # multiple redirect/exp modifiers per §6.1)
+            if not self.spf_permerror:
+                self.spf_dns_query_count = self.get_spf_dns_queries()
+                self.too_many_dns_queries = self.spf_dns_query_count > 10
+                self.spf_macros = self.get_spf_macros()
 
     def get_spf_macros(self):
         """Returns a list of SPF macros used in the record.
@@ -118,13 +135,7 @@ class SPF:
         """
         if not self.spf_record:
             return []
-        macros = _MACRO_RE.findall(self.spf_record)
-        # Return the full macro syntax for each match, deduplicated
-        full_macros = re.findall(
-            r'%{[slodiph crtvSLODIPHCRTV][0-9r]*[.\-+,/_=]*}',
-            self.spf_record
-        )
-        return list(set(full_macros))
+        return list(set(_MACRO_RE.findall(self.spf_record)))
 
     def get_spf_record(self, domain=None):
         """Fetches the SPF record for the specified domain.
@@ -147,7 +158,12 @@ class SPF:
             if not encoded_domain:
                 return None
 
-            resolver = self._make_recursive_resolver()
+            # Use auth NS for primary domain, recursive for foreign targets
+            if domain == self.domain:
+                resolver = self._make_resolver()
+            else:
+                resolver = self._make_recursive_resolver()
+
             logger.debug("Querying SPF for %s", encoded_domain)
             query_result = resolver.resolve(encoded_domain, "TXT")
 
@@ -163,8 +179,6 @@ class SPF:
                 logger.error(
                     "RFC 7208 §4.5 PermError: %d SPF records found for %s — "
                     "MTAs will abort SPF evaluation", len(spf_records), domain)
-                # Only flag PermError on the primary domain lookup, not
-                # during include/redirect recursion
                 if domain == self.domain:
                     self.spf_permerror = True
                 return spf_records[0]  # Return first for display
@@ -212,19 +226,21 @@ class SPF:
         """Returns the string value of the 'all' mechanism in the SPF record.
 
         RFC 7208 §4.6.1: mechanism names are case-insensitive.
-        RFC 7208 §6.1: multiple redirect modifiers trigger PermError.
+        RFC 7208 §6.1: multiple redirect OR exp modifiers trigger PermError.
+        RFC 7208 §5.1: redirect= is ignored when 'all' is present.
 
-        Uses word-boundary-aware matching to avoid false positives on tokens
-        like 'allow' that contain 'all' as a substring.
+        PermError checks take precedence over returning a valid 'all' match.
         """
         spf_record = self.spf_record
         visited_domains = set()
 
         while spf_record:
-            # Tokenize and check each token for an 'all' mechanism
+            # Tokenize and classify each token
             # RFC 7208 §4.6.1: mechanism names are case-insensitive
             all_matches = []
             redirect_targets = []
+            exp_count = 0
+
             for token in spf_record.split():
                 token_lower = token.lower()
                 if token_lower in ("-all", "~all", "?all", "+all", "all"):
@@ -232,23 +248,32 @@ class SPF:
                         token_lower if token_lower[0] in _QUALIFIERS
                         else "+" + token_lower
                     )
-                # Collect redirects (case-insensitive per §4.6.1)
-                mech = _strip_qualifier(token).lower()
-                if mech.startswith("redirect="):
-                    redirect_targets.append(mech[len("redirect="):])
+                # RFC 7208 §4.6.1: modifiers do NOT take qualifiers.
+                # Check the raw token (not after qualifier stripping).
+                if token_lower.startswith("redirect="):
+                    redirect_targets.append(token_lower[len("redirect="):])
+                if token_lower.startswith("exp="):
+                    exp_count += 1
 
-            if len(all_matches) == 1:
-                return all_matches[0]
-            elif len(all_matches) > 1:
-                return "2many"
-
-            # RFC 7208 §6.1: multiple redirect modifiers = PermError
+            # RFC 7208 §6.1: PermError takes precedence over valid results.
+            # Multiple redirect OR multiple exp = PermError.
             if len(redirect_targets) > 1:
                 logger.error(
                     "RFC 7208 §6.1 PermError: %d redirect modifiers in SPF "
                     "for %s", len(redirect_targets), self.domain)
                 self.spf_permerror = True
                 return None
+            if exp_count > 1:
+                logger.error(
+                    "RFC 7208 §6.1 PermError: %d exp modifiers in SPF "
+                    "for %s", exp_count, self.domain)
+                self.spf_permerror = True
+                return None
+
+            if len(all_matches) == 1:
+                return all_matches[0]
+            elif len(all_matches) > 1:
+                return "2many"
 
             if redirect_targets:
                 redirect_domain = redirect_targets[0]
@@ -268,6 +293,9 @@ class SPF:
 
         Used for redirect= and include: targets that live in foreign
         zones where the customer's authoritative NS would return REFUSED.
+
+        Per RFC 7208 §4.5, multiple SPF records on the target also
+        trigger PermError.
         """
         encoded_domain = _encode_idna(domain)
         if not encoded_domain:
@@ -275,10 +303,24 @@ class SPF:
         try:
             resolver = self._make_recursive_resolver()
             answers = resolver.resolve(encoded_domain, "TXT")
+
+            # Collect all SPF records — multiple = PermError
+            spf_records = []
             for rdata in answers:
                 txt = parse_txt_record(rdata)
                 if _is_spf_record(txt):
-                    return txt
+                    spf_records.append(txt)
+
+            if len(spf_records) > 1:
+                logger.error(
+                    "RFC 7208 §4.5 PermError: %d SPF records on "
+                    "redirect/include target %s", len(spf_records), domain)
+                self.spf_permerror = True
+                return spf_records[0]
+
+            if spf_records:
+                return spf_records[0]
+
         except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
                 dns.resolver.Timeout, dns.resolver.NoNameservers):
             logger.debug("SPF redirect lookup failed for %s", domain)
@@ -289,8 +331,12 @@ class SPF:
     def get_spf_dns_queries(self):
         """Count DNS-causing mechanisms per RFC 7208 §4.6.4.
 
-        Mechanisms that cause DNS lookups: include, a, mx, ptr, exists, redirect.
+        Mechanisms that cause DNS lookups: include, a, mx, ptr, exists.
+        redirect= also causes a lookup but is ignored when 'all' is
+        present (RFC 7208 §5.1).
+
         Handles qualifier-prefixed forms (-include:, ~mx, +a:, etc.).
+        Modifiers (redirect=) do NOT take qualifiers (§4.6.1).
 
         RFC 7208 §7: Targets containing macros (%{...}) are skipped during
         static counting because they require runtime IP context to resolve.
@@ -301,46 +347,104 @@ class SPF:
         lower bound on actual DNS queries.
         """
         resolver = self._make_recursive_resolver()
+        visited = set()
 
         def count_dns_queries(spf_record, depth=0):
             if depth > 10:
                 logger.warning("SPF recursion depth exceeded for %s", self.domain)
                 return 0
+
+            # RFC 7208 §5.1: redirect= is ignored when 'all' is present
+            has_all = _record_has_all(spf_record)
+
             count = 0
             for token in spf_record.split():
                 mech = _strip_qualifier(token).lower()
 
-                # include: and redirect= — count + recurse
-                if mech.startswith("include:") or mech.startswith("redirect="):
-                    if mech.startswith("include:"):
-                        target = mech[len("include:"):]
-                    else:
-                        target = mech[len("redirect="):]
-
+                # include: — qualifier-prefixed mechanism, count + recurse
+                if mech.startswith("include:"):
+                    target = mech[len("include:"):]
                     count += 1
 
-                    # RFC 7208 §7: skip macro targets — they require
-                    # runtime IP context that static analysis cannot provide
+                    # RFC 7208 §7: skip macro targets
                     if _has_macro(target):
                         logger.debug("Skipping macro target in SPF count: %s", target)
                         continue
 
-                    # IDNA-encode before resolving
+                    # Circular loop detection
+                    if target in visited:
+                        logger.debug("Circular SPF include detected: %s", target)
+                        continue
+                    visited.add(target)
+
                     encoded_target = _encode_idna(target)
                     if not encoded_target:
                         continue
 
                     try:
                         answers = resolver.resolve(encoded_target, "TXT")
+                        # Collect all SPF records — multiple = PermError per §4.5
+                        spf_records = []
                         for rdata in answers:
                             txt_record = parse_txt_record(rdata)
                             if _is_spf_record(txt_record):
-                                count += count_dns_queries(txt_record, depth + 1)
+                                spf_records.append(txt_record)
+
+                        if len(spf_records) > 1:
+                            logger.error(
+                                "RFC 7208 §4.5 PermError: %d SPF records on "
+                                "include target %s", len(spf_records), target)
+                            self.spf_permerror = True
+                        elif spf_records:
+                            count += count_dns_queries(spf_records[0], depth + 1)
                     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
                             dns.resolver.Timeout, dns.resolver.NoNameservers):
-                        logger.debug("SPF include/redirect lookup failed for %s", target)
+                        logger.debug("SPF include lookup failed for %s", target)
                     except Exception as e:
                         logger.debug("SPF include lookup error for %s: %s", target, e)
+
+                # redirect= — modifier, NO qualifier prefix.
+                # RFC 7208 §5.1: ignored when 'all' is present.
+                elif token.lower().startswith("redirect="):
+                    if has_all:
+                        logger.debug("Ignoring redirect= because 'all' is present")
+                        continue
+                    target = token.lower()[len("redirect="):]
+                    count += 1
+
+                    if _has_macro(target):
+                        logger.debug("Skipping macro target in SPF count: %s", target)
+                        continue
+
+                    if target in visited:
+                        logger.debug("Circular SPF redirect detected: %s", target)
+                        continue
+                    visited.add(target)
+
+                    encoded_target = _encode_idna(target)
+                    if not encoded_target:
+                        continue
+
+                    try:
+                        answers = resolver.resolve(encoded_target, "TXT")
+                        spf_records = []
+                        for rdata in answers:
+                            txt_record = parse_txt_record(rdata)
+                            if _is_spf_record(txt_record):
+                                spf_records.append(txt_record)
+
+                        if len(spf_records) > 1:
+                            logger.error(
+                                "RFC 7208 §4.5 PermError: %d SPF records on "
+                                "redirect target %s", len(spf_records), target)
+                            self.spf_permerror = True
+                        elif spf_records:
+                            count += count_dns_queries(spf_records[0], depth + 1)
+                    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
+                            dns.resolver.Timeout, dns.resolver.NoNameservers):
+                        logger.debug("SPF redirect lookup failed for %s", target)
+                    except Exception as e:
+                        logger.debug("SPF redirect lookup error for %s: %s", target, e)
 
                 # a mechanism: bare "a", "a:domain", "a/cidr"
                 elif mech == "a" or mech.startswith("a:") or mech.startswith("a/"):
