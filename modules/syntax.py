@@ -55,7 +55,7 @@ def _validate_spf(record):
     """
     elements = record.split()
 
-    if not elements or elements[0].lower() != "v=spf1":
+    if not elements or elements[0] != "v=spf1":
         return False
 
     for element in elements[1:]:

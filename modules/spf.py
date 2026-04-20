@@ -15,6 +15,20 @@ from .txt_utils import parse_txt_record
 
 logger = logging.getLogger("spoofyvibe.spf")
 
+# RFC 7208 §4.5: "v=spf1" is case-sensitive and MUST be followed by SP or
+# end-of-record.  This regex rejects "V=SPF1", "v=spf10", etc.
+_SPF_VERSION_RE = re.compile(r'^\s*v=spf1(?:\s|$)')
+
+
+def _is_spf_record(txt):
+    """Return True if txt is a valid SPF record per RFC 7208 §4.5.
+
+    The version tag is case-sensitive ('v=spf1', not 'V=SPF1') and must
+    be followed by a space character or be the entire record.
+    """
+    return bool(_SPF_VERSION_RE.match(txt))
+
+
 # SPF qualifier characters per RFC 7208 §4.6.2
 _QUALIFIERS = frozenset("+-~?")
 
@@ -83,7 +97,7 @@ class SPF:
             spf_records = []
             for record in query_result:
                 txt = parse_txt_record(record)
-                if txt.strip().lower().startswith("v=spf1"):
+                if _is_spf_record(txt):
                     spf_records.append(txt)
 
             if len(spf_records) > 1:
@@ -203,7 +217,7 @@ class SPF:
                         answers = resolver.resolve(url, "TXT")
                         for rdata in answers:
                             txt_record = parse_txt_record(rdata)
-                            if txt_record.strip().lower().startswith("v=spf1"):
+                            if _is_spf_record(txt_record):
                                 count += count_dns_queries(txt_record, depth + 1)
                     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
                             dns.resolver.Timeout, dns.resolver.NoNameservers):

@@ -19,6 +19,7 @@ possible score is reduced proportionally. Grade boundaries use the
 percentage of max, so grades are comparable across scan modes.
 """
 
+from .spf import _is_spf_record
 
 class SecurityScore:
     """Calculates a weighted security score for a domain's email configuration."""
@@ -130,8 +131,8 @@ class SecurityScore:
         if too_many:
             return 5
 
-        # Valid syntax — basic check: starts with v=spf1 (+3)
-        if spf.strip().lower().startswith("v=spf1"):
+        # Valid syntax — strict check per RFC 7208 §4.5 (+3)
+        if _is_spf_record(spf):
             score += 3
 
         # Strong all mechanism: -all (+6), ~all (+4), ?all (+1), +all (0)
@@ -421,7 +422,7 @@ class SecurityScore:
                            "(RFC 7208 §4.5)"))
             return details
 
-        if spf.strip().lower().startswith("v=spf1"):
+        if _is_spf_record(spf):
             details.append(("✅", "Valid SPF syntax"))
         else:
             details.append(("❌", "Invalid SPF syntax"))
