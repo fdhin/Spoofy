@@ -70,7 +70,8 @@ async def process_domain(domain, enable_dkim=False, enable_remediation=True,
         dkim_data["DKIM_SCANNED"] = True
     else:
         dkim_data = {"DKIM": None, "DKIM_SELECTORS": [], "DKIM_SELECTOR_COUNT": 0,
-                     "DKIM_HAS_WEAK_KEYS": False, "DKIM_SCANNED": False}
+                     "DKIM_HAS_WEAK_KEYS": False, "DKIM_HAS_REVOKED_KEYS": False,
+                     "DKIM_HAS_TESTING_KEYS": False, "DKIM_SCANNED": False}
 
     # Validate MX hosts against MTA-STS policy
     mta_sts_mx_mismatch = mta_sts.validate_mx_against_policy(mx_info.get_mx_hosts())

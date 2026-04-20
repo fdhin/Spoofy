@@ -101,7 +101,12 @@ class SecurityScore:
         return total
 
     def _score_spf(self):
-        """Score SPF configuration (0-16 points)."""
+        """Score SPF configuration (0-16 points).
+
+        Per RFC 7208, exceeding 10 DNS lookups causes a PermError.
+        Receiving MTAs abort the SPF check entirely, so a record with
+        >10 lookups provides zero protection despite existing.
+        """
         score = 0
         spf = self.result.get("SPF")
         spf_all = self.result.get("SPF_MULTIPLE_ALLS")
@@ -112,6 +117,11 @@ class SecurityScore:
 
         # Record exists (+5)
         score += 5
+
+        # RFC 7208 PermError: >10 lookups aborts SPF check entirely.
+        # The record exists (credit for that) but provides no protection.
+        if too_many:
+            return 5
 
         # Valid syntax — basic check: starts with v=spf1 (+3)
         if spf.strip().lower().startswith("v=spf1"):
@@ -126,8 +136,7 @@ class SecurityScore:
             score += 1
 
         # DNS lookup count within limit (+2)
-        if not too_many:
-            score += 2
+        score += 2
 
         return min(score, 16)
 
@@ -182,7 +191,11 @@ class SecurityScore:
         return max(0, min(score, 22))
 
     def _score_dkim(self):
-        """Score DKIM configuration (0-15 points)."""
+        """Score DKIM configuration (0-15 points).
+
+        Only usable selectors (valid version, not revoked, applicable for email)
+        contribute to the score. Testing-mode keys are penalized per RFC 6376 §3.6.1.
+        """
         score = 0
         dkim = self.result.get("DKIM")
         selectors = self.result.get("DKIM_SELECTORS", [])
@@ -191,22 +204,30 @@ class SecurityScore:
         if not dkim:
             return 0
 
-        # Selectors found (+7)
+        # Count only usable selectors for scoring
+        usable = [s for s in selectors if s.get("is_usable", True)]
+
+        if not usable:
+            # All selectors are revoked/invalid/non-email — no credit
+            return 0
+
+        # Usable selectors found (+7)
         score += 7
 
-        # Multiple selectors found (+3) — indicates good key rotation
-        if len(selectors) > 1:
+        # Multiple usable selectors found (+3) — indicates good key rotation
+        if len(usable) > 1:
             score += 3
 
         # Key strength: all strong keys (+5), has weak (-3 from full)
-        if selectors:
-            if not has_weak:
-                score += 5
-            else:
-                score += 2  # Some credit for having DKIM even with weak keys
+        if not has_weak:
+            score += 5
         else:
-            # Legacy: no structured selector data, give partial credit
-            score += 3
+            score += 2  # Some credit for having DKIM even with weak keys
+
+        # Penalty: all usable selectors are in testing mode (-2)
+        # RFC 6376 §3.6.1: verifiers MUST NOT treat testing-mode differently from unsigned
+        if all(s.get("is_testing", False) for s in usable):
+            score = max(score - 2, 0)
 
         return min(score, 15)
 
@@ -266,7 +287,15 @@ class SecurityScore:
             return 0
 
     def _score_mta_sts(self):
-        """Score MTA-STS and TLS-RPT configuration (0-10 points)."""
+        """Score MTA-STS and TLS-RPT configuration (0-10 points).
+
+        Null MX (RFC 7505) domains intentionally receive no email, so
+        MTA-STS and TLS-RPT are inapplicable — award full points.
+        """
+        # Null MX exemption: domain doesn't receive mail
+        if self.result.get("MX_HAS_NULL_MX", False):
+            return 10
+
         score = 0
         mta_sts_txt = self.result.get("MTA_STS_TXT")
         mta_sts_mode = self.result.get("MTA_STS_MODE")
@@ -477,20 +506,51 @@ class SecurityScore:
             details.append(("⚠️", "No DKIM selectors found"))
             return details
 
-        count = len(selectors)
-        details.append(("✅", f"{count} DKIM selector(s) found"))
+        usable = [s for s in selectors if s.get("is_usable", True)]
+        count = len(usable)
+        total = len(selectors)
+
+        if count == 0:
+            details.append(("❌", f"{total} selector(s) found but none are usable for email"))
+        else:
+            details.append(("✅", f"{count} usable DKIM selector(s) found"))
 
         if count > 1:
             details.append(("✅", "Multiple selectors — good key rotation practice"))
 
-        if selectors:
-            for sel in selectors:
-                bits = sel.get("key_bits")
-                if bits:
-                    if bits >= 2048:
-                        details.append(("✅", f"{sel['selector']}: {bits}-bit key (strong)"))
-                    else:
-                        details.append(("❌", f"{sel['selector']}: {bits}-bit key (weak — upgrade to 2048+)"))
+        for sel in selectors:
+            name = sel.get("selector", "unknown")
+
+            if sel.get("is_revoked"):
+                details.append(("⚠️", f"{name}: key is REVOKED (empty p= tag)"))
+                continue
+
+            if not sel.get("is_valid_version", True):
+                details.append(("⚠️", f"{name}: invalid key record version, discarded"))
+                continue
+
+            if not sel.get("is_email_applicable", True):
+                details.append(("ℹ️", f"{name}: not applicable for email (s= tag)"))
+                continue
+
+            if sel.get("is_testing"):
+                details.append(("⚠️", f"{name}: testing mode (t=y) — verifiers treat as unsigned"))
+
+            bits = sel.get("key_bits")
+            key_type = sel.get("key_type", "rsa")
+            if bits:
+                if key_type == "ed25519":
+                    details.append(("✅", f"{name}: Ed25519 key ({bits}-bit, strong)"))
+                elif bits >= 2048:
+                    details.append(("✅", f"{name}: {bits}-bit {key_type} key (strong)"))
+                else:
+                    details.append(("❌", f"{name}: {bits}-bit {key_type} key (weak — upgrade to 2048+)"))
+
+            if sel.get("is_sha1_only"):
+                details.append(("⚠️", f"{name}: restricted to SHA-1 only (h=sha1) — SHA-256 recommended"))
+
+            if sel.get("is_strict"):
+                details.append(("ℹ️", f"{name}: strict subdomain mode (t=s) — i= must exactly match d="))
 
         return details
 
@@ -501,6 +561,7 @@ class SecurityScore:
         location = self.result.get("BIMI_LOCATION")
         authority = self.result.get("BIMI_AUTHORITY")
         dmarc_policy = self.result.get("DMARC_POLICY")
+        dmarc_pct = self.result.get("DMARC_PCT")
 
         if not bimi:
             details.append(("ℹ️", "No BIMI record found (optional)"))
@@ -511,6 +572,11 @@ class SecurityScore:
         # BIMI requires DMARC quarantine/reject for receivers to render the logo
         if dmarc_policy not in ("quarantine", "reject"):
             details.append(("⚠️", "BIMI is decorative without DMARC enforcement (p=quarantine or p=reject) — receivers will not render the logo"))
+
+        # BIMI requires pct=100 (RFC 8965 §3.1.1)
+        # Receivers like Gmail and Apple will not display the logo if pct < 100
+        if dmarc_pct is not None and str(dmarc_pct).strip() != "100":
+            details.append(("⚠️", f"BIMI requires DMARC pct=100 for logo display — current pct={dmarc_pct}"))
 
         if location and str(location).strip():
             details.append(("✅", f"Logo location: {location}"))
@@ -564,6 +630,12 @@ class SecurityScore:
     def _mta_sts_details(self):
         """Return detail items for MTA-STS & TLS-RPT scoring."""
         details = []
+
+        # Null MX exemption: domain doesn't receive mail
+        if self.result.get("MX_HAS_NULL_MX", False):
+            details.append(("✅", "Null MX — domain does not receive email, MTA-STS/TLS-RPT not applicable"))
+            return details
+
         mta_sts_txt = self.result.get("MTA_STS_TXT")
         mta_sts_mode = self.result.get("MTA_STS_MODE")
         max_age = self.result.get("MTA_STS_MAX_AGE")

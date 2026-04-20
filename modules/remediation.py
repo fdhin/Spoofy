@@ -371,7 +371,7 @@ class RemediationEngine:
                 )
             )
 
-        if pct and str(pct).strip() != "100":
+        if pct is not None and str(pct).strip() != "100":
             recs.append(
                 Recommendation(
                     priority=3,
@@ -502,11 +502,65 @@ class RemediationEngine:
                 )
             )
 
-        # Check for weak keys
+        # Check individual selectors for issues
         if selectors:
             for sel in selectors:
                 bits = sel.get("key_bits")
                 selector_name = sel.get("selector", "unknown")
+
+                # Revoked keys (RFC 6376 §3.6.1 — empty p= tag)
+                if sel.get("is_revoked"):
+                    recs.append(
+                        Recommendation(
+                            priority=4,
+                            category="DKIM",
+                            title=f"DKIM key '{selector_name}' is revoked",
+                            description=(
+                                f"The DKIM selector '{selector_name}' for {self.domain} has an empty p= tag, "
+                                "which per RFC 6376 §3.6.1 means the key has been revoked. "
+                                "All signatures using this selector will fail verification."
+                            ),
+                            impact=(
+                                "A revoked key is expected when rotating keys. If this is intentional, "
+                                "the selector can be removed from DNS after the transition period. "
+                                "If unintentional, emails signed with this key are failing DKIM checks."
+                            ),
+                            fix=(
+                                f"If key rotation is complete, remove the DNS record:\n\n"
+                                f"  DELETE  {selector_name}._domainkey.{self.domain}  TXT\n\n"
+                                f"If this was unintentional, re-publish the public key."
+                            ),
+                            reference="https://datatracker.ietf.org/doc/html/rfc6376#section-3.6.1",
+                        )
+                    )
+                    continue
+
+                # Testing mode (RFC 6376 §3.6.1 — t=y flag)
+                if sel.get("is_testing"):
+                    recs.append(
+                        Recommendation(
+                            priority=2,
+                            category="DKIM",
+                            title=f"DKIM key '{selector_name}' is in testing mode (t=y)",
+                            description=(
+                                f"The DKIM selector '{selector_name}' for {self.domain} has the t=y flag set. "
+                                "Per RFC 6376 §3.6.1, verifiers MUST NOT treat testing-mode signatures "
+                                "differently from unsigned email — meaning DKIM provides no protection."
+                            ),
+                            impact=(
+                                "While the t=y flag is set, DKIM signatures from this selector offer "
+                                "no security benefit. DMARC alignment via DKIM is effectively disabled."
+                            ),
+                            fix=(
+                                f"Remove the 'y' flag from the t= tag in the DNS record:\n\n"
+                                f'  {selector_name}._domainkey.{self.domain}.  IN  TXT  "v=DKIM1; k=rsa; p=<key>"\n\n'
+                                "Remove the t=y flag only after confirming DKIM signing is working correctly."
+                            ),
+                            reference="https://datatracker.ietf.org/doc/html/rfc6376#section-3.6.1",
+                        )
+                    )
+
+                # Weak keys
                 if bits and bits < 2048:
                     recs.append(
                         Recommendation(
@@ -528,6 +582,31 @@ class RemediationEngine:
                                 "Then update your email server to sign with the new key."
                             ),
                             reference="https://datatracker.ietf.org/doc/html/rfc8301",
+                        )
+                    )
+
+                # SHA-1 only (RFC 6376 §3.3 — rsa-sha256 SHOULD be used)
+                if sel.get("is_sha1_only"):
+                    recs.append(
+                        Recommendation(
+                            priority=3,
+                            category="DKIM",
+                            title=f"DKIM key '{selector_name}' restricted to SHA-1 only",
+                            description=(
+                                f"The DKIM selector '{selector_name}' for {self.domain} has h=sha1, "
+                                "restricting it to SHA-1 hash algorithm only. Per RFC 6376 §3.3, "
+                                "signers SHOULD sign using rsa-sha256."
+                            ),
+                            impact=(
+                                "SHA-1 is cryptographically weaker than SHA-256. While still accepted "
+                                "by most verifiers, some may downgrade trust for SHA-1-only signatures."
+                            ),
+                            fix=(
+                                f"Update the key record to allow SHA-256:\n\n"
+                                f'  {selector_name}._domainkey.{self.domain}.  IN  TXT  "v=DKIM1; k=rsa; h=sha256; p=<key>"\n\n'
+                                "Or remove the h= tag entirely to allow all algorithms (default)."
+                            ),
+                            reference="https://datatracker.ietf.org/doc/html/rfc6376#section-3.3",
                         )
                     )
 

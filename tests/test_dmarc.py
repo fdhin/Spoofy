@@ -29,15 +29,14 @@ class TestDmarcTagParser(unittest.TestCase):
         self.assertEqual(d.policy, "reject")
         self.assertEqual(d.sp, "none")
 
-    def test_p_tag_reversed_order(self):
-        """BUG REGRESSION: sp= before p= must not confuse the parser.
-
-        Old code: split("p=")[1] matched the 'p=' inside 'sp=reject',
-        returning 'reject' instead of 'quarantine'.
+    def test_p_tag_reversed_order_aborts(self):
+        """Strict ordering (RFC 7489 §6.3): 'p' MUST be the second tag.
+        
+        If 'sp' is before 'p', the record is functionally invalid and aborts.
         """
         d = self._make_dmarc_with_record("v=DMARC1; sp=reject; p=quarantine;")
-        self.assertEqual(d.policy, "quarantine")
-        self.assertEqual(d.sp, "reject")
+        self.assertIsNone(d.policy)
+        self.assertIsNone(d.sp)
 
     def test_aspf_does_not_collide_with_sp(self):
         """aspf= contains 'sp' as a substring — must not confuse sp= parser."""
@@ -54,7 +53,7 @@ class TestDmarcTagParser(unittest.TestCase):
         d = self._make_dmarc_with_record(record)
         self.assertEqual(d.policy, "reject")
         self.assertEqual(d.sp, "quarantine")
-        self.assertEqual(d.pct, "50")
+        self.assertEqual(d.pct, 50)
         self.assertEqual(d.aspf, "s")
         self.assertEqual(d.rua, "mailto:agg@example.com")
         self.assertEqual(d.ruf, "mailto:for@example.com")
@@ -148,6 +147,96 @@ class TestDmarcEffectivePolicy(unittest.TestCase):
             "v=DMARC1; p=reject; sp=quarantine;", is_fallback=True
         )
         self.assertEqual(d.effective_policy, "quarantine")
+
+
+class TestDmarcHardening(unittest.TestCase):
+    """Tests RFC 7489 hard requirements."""
+    
+    def _make_dmarc_with_record(self, record):
+        with patch.object(DMARC, "get_dmarc_record", return_value=record), \
+             patch.object(DMARC, "check_wildcard_dns", return_value=False):
+            return DMARC("example.com")
+
+    def test_rua_fallback(self):
+        """RFC §6.6.3 step 6: Invalid p with rua present falls back to p=none."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=typo; rua=mailto:a@b.c;")
+        self.assertEqual(d.policy, "none")
+        self.assertIsNone(d.sp)
+        self.assertEqual(d.rua, "mailto:a@b.c")
+
+    def test_invalid_p_no_rua_aborts(self):
+        """RFC §6.6.3 step 6: Invalid p without rua aborts processing."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=typo;")
+        self.assertIsNone(d.policy)
+        self.assertIsNone(d.dmarc_record)
+        self.assertEqual(d.tags, {})
+
+    def test_strict_tag_ordering_invalid(self):
+        """RFC §6.3: v and p must be in order."""
+        # p is not second, no rua, so it aborts
+        d = self._make_dmarc_with_record("v=DMARC1; rua=mailto:a@b.c; p=reject;")
+        self.assertEqual(d.policy, "none") # Fallback to none because it's invalid but has rua
+        self.assertFalse(d._is_ordering_valid)
+
+    def test_tag_ordering_malformed_bypassing(self):
+        """Test tag ordering handles tags lacking '=' properly (Bug 2)."""
+        d = self._make_dmarc_with_record("v=DMARC1; malformed_tag; p=reject;")
+        self.assertIsNone(d.policy)
+        self.assertFalse(d._is_ordering_valid)
+
+    def test_strict_tag_ordering_valid(self):
+        """Valid tag ordering."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=reject; rua=mailto:a@b.c;")
+        self.assertEqual(d.policy, "reject")
+        self.assertTrue(d._is_ordering_valid)
+
+    def test_case_insensitive_policy(self):
+        """RFC 5234: literal text strings are case-insensitive (Bug 3)."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=REJECT; sp=QUARANTINE;")
+        self.assertEqual(d.policy, "reject")
+        self.assertEqual(d.sp, "quarantine")
+
+    def test_pct_and_defaults(self):
+        """Defaults and bad types should be handled safely."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=reject; pct=wat; adkim=wat;")
+        self.assertEqual(d.pct, 100)
+        self.assertEqual(d.adkim, "r")
+        self.assertEqual(d.aspf, "r")
+
+    @patch("dns.resolver.Resolver")
+    def test_multiple_dmarc_records_aborts(self, mock_resolver_cls):
+        """RFC §6.6.3 step 5: multiple records aborts without fallback (Bug 1)."""
+        mock_resolver = MagicMock()
+        mock_resolver_cls.return_value = mock_resolver
+        
+        # Create two valid DMARC1 answers
+        mx1 = MagicMock()
+        mx1.strings = [b"v=DMARC1; p=reject;"]
+        mx2 = MagicMock()
+        mx2.strings = [b"v=DMARC1; p=none;"]
+        mock_resolver.resolve.return_value = [mx1, mx2]
+        
+        with patch.object(DMARC, "check_wildcard_dns", return_value=False):
+            d = DMARC("sub.example.com")
+            
+        self.assertIsNone(d.dmarc_record)
+        mock_resolver.resolve.assert_called_once_with("_dmarc.sub.example.com", "TXT")
+        
+    @patch("dns.resolver.Resolver")
+    def test_idna_encoding(self, mock_resolver_cls):
+        """RFC §6.6.1: IDNA encoding."""
+        mock_resolver = MagicMock()
+        mock_resolver_cls.return_value = mock_resolver
+        
+        mx1 = MagicMock()
+        mx1.strings = [b"v=DMARC1; p=reject;"]
+        mock_resolver.resolve.return_value = [mx1]
+        
+        with patch.object(DMARC, "check_wildcard_dns", return_value=False):
+            d = DMARC("münchen.de")
+            
+        mock_resolver.resolve.assert_called_with("_dmarc.xn--mnchen-3ya.de", "TXT")
+        self.assertEqual(d.policy, "reject")
 
 
 if __name__ == "__main__":

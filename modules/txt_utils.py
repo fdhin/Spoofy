@@ -48,12 +48,17 @@ def parse_tag_value(record):
     avoiding substring collisions (e.g. "sp=" matching inside "aspf=",
     or "p=" matching inside "sp=").
 
+    Per RFC 6376 §3.2 / RFC 7489: "Tags with duplicate names MUST NOT
+    occur within a single tag-list; if a tag name does occur more than
+    once, the entire tag-list is invalid."
+
     Args:
         record: The raw TXT record string.
 
     Returns:
         Dict mapping lowercase tag names to their string values.
-        Returns empty dict if record is None or empty.
+        Returns empty dict if record is None, empty, or contains
+        duplicate tag names.
     """
     tags = {}
     if not record:
@@ -62,5 +67,9 @@ def parse_tag_value(record):
         part = part.strip()
         if "=" in part:
             key, _, value = part.partition("=")
-            tags[key.strip().lower()] = value.strip()
+            normalized_key = key.strip().lower()
+            if normalized_key in tags:
+                # Duplicate tag name — entire record is invalid per RFC
+                return {}
+            tags[normalized_key] = value.strip()
     return tags

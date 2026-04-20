@@ -174,8 +174,8 @@ class TestSecurityScore(unittest.TestCase):
         score = SecurityScore(result)
         self.assertEqual(score.breakdown["spoofability"]["score"], 8)
 
-    def test_too_many_dns_queries_loses_points(self):
-        """Too many DNS queries should lose 4 SPF points."""
+    def test_too_many_dns_queries_hard_caps_score(self):
+        """SPF with >10 DNS lookups causes RFC 7208 PermError — hard-cap at 5."""
         result_ok = self._make_result(
             SPF="v=spf1 -all",
             SPF_MULTIPLE_ALLS="-all",
@@ -190,9 +190,9 @@ class TestSecurityScore(unittest.TestCase):
         )
         score_ok = SecurityScore(result_ok)
         score_bad = SecurityScore(result_bad)
-        self.assertEqual(
-            score_ok.breakdown["spf"]["score"] - score_bad.breakdown["spf"]["score"], 2
-        )
+        # Perfect SPF = 16, PermError = 5 (record exists only)
+        self.assertEqual(score_ok.breakdown["spf"]["score"], 16)
+        self.assertEqual(score_bad.breakdown["spf"]["score"], 5)
 
     def test_to_dict_returns_expected_keys(self):
         """to_dict() should return the expected keys."""
@@ -244,6 +244,54 @@ class TestSecurityScore(unittest.TestCase):
         )
         score = SecurityScore(result)
         self.assertEqual(score.breakdown["bimi"]["score"], 4)
+
+    def test_null_mx_gets_full_mta_sts_score(self):
+        """Null MX domains get full MTA-STS points — MTA-STS is inapplicable."""
+        result = self._make_result(
+            MX_COUNT=1,
+            MX_HAS_NULL_MX=True,
+        )
+        score = SecurityScore(result)
+        self.assertEqual(score.breakdown["mta_sts"]["score"], 10)
+
+    def test_null_mx_mta_sts_details_short_circuit(self):
+        """Null MX should short-circuit MTA-STS details."""
+        result = self._make_result(
+            MX_COUNT=1,
+            MX_HAS_NULL_MX=True,
+        )
+        score = SecurityScore(result)
+        details = score.breakdown["mta_sts"]["details"]
+        self.assertEqual(len(details), 1)
+        self.assertIn("Null MX", details[0][1])
+
+    def test_bimi_pct_not_100_warning(self):
+        """BIMI should warn when DMARC pct < 100."""
+        result = self._make_result(
+            BIMI_RECORD="v=BIMI1; l=https://test.com/logo.svg",
+            BIMI_LOCATION="https://test.com/logo.svg",
+            DMARC="v=DMARC1; p=reject; pct=50",
+            DMARC_POLICY="reject",
+            DMARC_PCT=50,
+        )
+        score = SecurityScore(result)
+        details = score.breakdown["bimi"]["details"]
+        pct_warnings = [d for d in details if "pct=100" in d[1]]
+        self.assertTrue(len(pct_warnings) > 0, "Should warn about pct != 100")
+
+    def test_bimi_pct_100_no_warning(self):
+        """BIMI should not warn when DMARC pct=100."""
+        result = self._make_result(
+            BIMI_RECORD="v=BIMI1; l=https://test.com/logo.svg",
+            BIMI_LOCATION="https://test.com/logo.svg",
+            DMARC="v=DMARC1; p=reject; pct=100",
+            DMARC_POLICY="reject",
+            DMARC_PCT=100,
+        )
+        score = SecurityScore(result)
+        details = score.breakdown["bimi"]["details"]
+        pct_warnings = [d for d in details if "pct=100" in d[1]]
+        self.assertEqual(len(pct_warnings), 0, "Should not warn when pct=100")
 
     def test_breakdown_has_all_categories(self):
         """Score breakdown includes all 8 categories."""

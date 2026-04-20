@@ -205,7 +205,7 @@ def printer(**kwargs):
             "[*]", f"Found DMARC policy: {p}" if p else "No DMARC policy found.", "info"
         )
         output_message(
-            "[*]", f"Found DMARC pct: {pct}" if pct else "No DMARC pct found.", "info"
+            "[*]", f"Found DMARC pct: {pct}" if pct is not None else "No DMARC pct found.", "info"
         )
         output_message(
             "[*]",
