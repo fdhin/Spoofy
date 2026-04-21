@@ -90,7 +90,7 @@ def write_to_markdown(data, file_name="output.md"):
                      "MX_COUNT", "MX_ALL_STARTTLS",
                      "DNSSEC_ENABLED", "DNSSEC_HAS_DS",
                      "DANE_HAS_TLSA",
-                     "CAA_ISSUE", "CAA_ISSUEWILD",
+                     "CAA_HAS_ISSUE", "CAA_HAS_ISSUEWILD",
                      "M365_DETECTED", "M365_TENANT_NAME", "M365_MX_PREFIX",
                      "DNS_SERVER"]:
             val = result.get(key)
@@ -278,9 +278,20 @@ def printer(**kwargs):
             output_message("[?]", "DANE: TLSA records found but not DNSSEC-validated (AD flag absent)", "warning")
 
     # CAA
-    caa_issue = kwargs.get("CAA_ISSUE")
-    if caa_issue:
-        output_message("[*]", f"CAA issue: {caa_issue}", "info")
+    caa_records = kwargs.get("CAA_RECORDS", [])
+    caa_error = kwargs.get("CAA_ERROR")
+    if caa_error:
+        output_message("[-]", f"CAA: DNS lookup failed — {caa_error}", "bad")
+    elif caa_records:
+        has_issue = kwargs.get("CAA_HAS_ISSUE", False)
+        has_issuewild = kwargs.get("CAA_HAS_ISSUEWILD", False)
+        parts = []
+        if has_issue:
+            parts.append("issue")
+        if has_issuewild:
+            parts.append("issuewild")
+        tag_summary = ", ".join(parts) if parts else "iodef only"
+        output_message("[*]", f"CAA: {len(caa_records)} record(s) ({tag_summary})", "info")
     else:
         output_message("[?]", "No CAA records found.", "warning")
 

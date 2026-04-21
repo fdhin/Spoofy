@@ -19,7 +19,7 @@ DEFAULT_DB_DIR = os.path.expanduser("~/.spoofyvibe")
 DEFAULT_DB_PATH = os.path.join(DEFAULT_DB_DIR, "history.db")
 
 # Schema version for future migrations
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class ScanHistory:
@@ -71,6 +71,7 @@ class ScanHistory:
                     mx_score INTEGER,
                     dnssec_score INTEGER,
                     caa_score INTEGER,
+                    dane_score INTEGER,
                     result_json TEXT NOT NULL
                 );
 
@@ -114,6 +115,12 @@ class ScanHistory:
             conn.execute("ALTER TABLE scans ADD COLUMN caa_score INTEGER")
             conn.commit()
 
+        # v3 → v4: add dane_score
+        if "dane_score" not in columns:
+            logger.info("Migrating database: adding dane_score column")
+            conn.execute("ALTER TABLE scans ADD COLUMN dane_score INTEGER")
+            conn.commit()
+
     def save_scan(self, result):
         """
         Save a scan result to the database.
@@ -147,23 +154,24 @@ class ScanHistory:
                    (domain, timestamp, score, posture, spoofable,
                     spf_score, dmarc_score, dkim_score, bimi_score,
                     spoof_score, mta_sts_score, mx_score, dnssec_score,
-                    caa_score, result_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    caa_score, dane_score, result_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     domain,
                     timestamp,
                     score,
                     posture,
                     spoofable_int,
-                    breakdown.get("spf", {}).get("score", 0),
-                    breakdown.get("dmarc", {}).get("score", 0),
-                    breakdown.get("dkim", {}).get("score", 0),
-                    breakdown.get("bimi", {}).get("score", 0),
-                    breakdown.get("spoofability", {}).get("score", 0),
-                    breakdown.get("mta_sts", {}).get("score", 0),
-                    breakdown.get("mx", {}).get("score", 0),
-                    breakdown.get("dnssec", {}).get("score", 0),
-                    breakdown.get("caa", {}).get("score", 0),
+                    breakdown.get("spf", {}).get("score"),
+                    breakdown.get("dmarc", {}).get("score"),
+                    breakdown.get("dkim", {}).get("score"),
+                    breakdown.get("bimi", {}).get("score"),
+                    breakdown.get("spoofability", {}).get("score"),
+                    breakdown.get("mta_sts", {}).get("score"),
+                    breakdown.get("mx", {}).get("score"),
+                    breakdown.get("dnssec", {}).get("score"),
+                    breakdown.get("caa", {}).get("score"),
+                    breakdown.get("dane", {}).get("score"),
                     json.dumps(result, default=str),
                 ),
             )
@@ -193,19 +201,20 @@ class ScanHistory:
                        (domain, timestamp, score, posture, spoofable,
                         spf_score, dmarc_score, dkim_score, bimi_score,
                         spoof_score, mta_sts_score, mx_score, dnssec_score,
-                        caa_score, result_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        caa_score, dane_score, result_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         domain, timestamp, score, posture, spoofable_int,
-                        breakdown.get("spf", {}).get("score", 0),
-                        breakdown.get("dmarc", {}).get("score", 0),
-                        breakdown.get("dkim", {}).get("score", 0),
-                        breakdown.get("bimi", {}).get("score", 0),
-                        breakdown.get("spoofability", {}).get("score", 0),
-                        breakdown.get("mta_sts", {}).get("score", 0),
-                        breakdown.get("mx", {}).get("score", 0),
-                        breakdown.get("dnssec", {}).get("score", 0),
-                        breakdown.get("caa", {}).get("score", 0),
+                        breakdown.get("spf", {}).get("score"),
+                        breakdown.get("dmarc", {}).get("score"),
+                        breakdown.get("dkim", {}).get("score"),
+                        breakdown.get("bimi", {}).get("score"),
+                        breakdown.get("spoofability", {}).get("score"),
+                        breakdown.get("mta_sts", {}).get("score"),
+                        breakdown.get("mx", {}).get("score"),
+                        breakdown.get("dnssec", {}).get("score"),
+                        breakdown.get("caa", {}).get("score"),
+                        breakdown.get("dane", {}).get("score"),
                         json.dumps(result, default=str),
                     ),
                 )
@@ -229,7 +238,8 @@ class ScanHistory:
                 rows = conn.execute(
                     """SELECT id, domain, timestamp, score, posture, spoofable,
                               spf_score, dmarc_score, dkim_score, bimi_score,
-                              spoof_score, mta_sts_score, mx_score, dnssec_score
+                              spoof_score, mta_sts_score, mx_score, dnssec_score,
+                              caa_score, dane_score
                        FROM scans WHERE domain LIKE ?
                        ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
                     (f"%{domain_filter}%", limit, offset),
@@ -239,7 +249,7 @@ class ScanHistory:
                     """SELECT id, domain, timestamp, score, posture, spoofable,
                               spf_score, dmarc_score, dkim_score, bimi_score,
                               spoof_score, mta_sts_score, mx_score, dnssec_score,
-                              caa_score
+                              caa_score, dane_score
                        FROM scans
                        ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
                     (limit, offset),
@@ -271,7 +281,7 @@ class ScanHistory:
                 """SELECT id, domain, timestamp, score, posture, spoofable,
                           spf_score, dmarc_score, dkim_score, bimi_score,
                           spoof_score, mta_sts_score, mx_score, dnssec_score,
-                          caa_score
+                          caa_score, dane_score
                    FROM scans WHERE domain = ?
                    ORDER BY timestamp DESC LIMIT ?""",
                 (domain, limit),
@@ -293,7 +303,7 @@ class ScanHistory:
                 """SELECT timestamp, score, posture,
                           spf_score, dmarc_score, dkim_score, bimi_score,
                           spoof_score, mta_sts_score, mx_score, dnssec_score,
-                          caa_score
+                          caa_score, dane_score
                    FROM scans WHERE domain = ?
                    ORDER BY timestamp ASC LIMIT ?""",
                 (domain, limit),

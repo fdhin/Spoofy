@@ -263,20 +263,6 @@ class SecurityScore:
 
         return min(score, 5)
 
-    def _score_caa(self):
-        """Score CAA configuration (0-5 points)."""
-        caa = self.result.get("CAA_RECORDS", [])
-        has_issue = self.result.get("CAA_HAS_ISSUE", False)
-        
-        if not caa:
-            return 0
-            
-        score = 2 # Exists
-        
-        if has_issue:
-            score += 3
-            
-        return min(score, 5)
 
     def _score_spoofability(self):
         """Score based on spoofability verdict (0-15 points)."""
@@ -605,22 +591,83 @@ class SecurityScore:
 
         return details
 
+    def _score_caa(self):
+        """Score CAA configuration (0-5 points)."""
+        # A fatal outage or an unknown critical tag means CAs will refuse issuance. Zero points.
+        if self.result.get("CAA_ERROR") or self.result.get("CAA_HAS_UNKNOWN_CRITICAL"):
+            return 0
+            
+        caa = self.result.get("CAA_RECORDS", [])
+        has_issue = self.result.get("CAA_HAS_ISSUE", False)
+        has_issuewild = self.result.get("CAA_HAS_ISSUEWILD", False)
+        
+        if not caa:
+            return 0
+            
+        score = 2 # Exists
+        
+        if has_issue or has_issuewild:
+            score += 3
+            
+        return min(score, 5)
+
     def _caa_details(self):
         """Return detail items for CAA scoring."""
         details = []
+        
+        if self.result.get("CAA_ERROR"):
+            details.append(("❌", "CRITICAL: CAA DNS lookup failed (SERVFAIL/Timeout) — CAs will refuse to issue certificates!"))
+            return details
+            
+        if self.result.get("CAA_HAS_UNKNOWN_CRITICAL"):
+            details.append(("❌", "CRITICAL: CAA contains an unknown tag marked CRITICAL. CAs MUST refuse issuance!"))
+            return details
+
         caa = self.result.get("CAA_RECORDS", [])
         has_issue = self.result.get("CAA_HAS_ISSUE", False)
+        has_issuewild = self.result.get("CAA_HAS_ISSUEWILD", False)
+        has_rfc8657 = self.result.get("CAA_HAS_RFC8657_EXT", False)
+        effective_domain = self.result.get("CAA_EFFECTIVE_DOMAIN")
+        domain = self.result.get("DOMAIN", "")
+        deny_regular = self.result.get("CAA_DENY_ALL_REGULAR", False)
+        deny_wildcard = self.result.get("CAA_DENY_ALL_WILDCARD", False)
+        has_contactemail = self.result.get("CAA_HAS_CONTACTEMAIL", False)
+        has_contactphone = self.result.get("CAA_HAS_CONTACTPHONE", False)
+        has_iodef = self.result.get("CAA_HAS_IODEF", False)
 
         if not caa:
             details.append(("⚠️", "No CAA record found"))
             return details
 
-        details.append(("✅", "CAA record exists"))
-
-        if has_issue:
-            details.append(("✅", "CAA restricts issuance to specific authorities"))
+        # Tell the user if the record was inherited from a parent domain
+        if effective_domain and effective_domain != domain:
+            details.append(("✅", f"CAA record exists (inherited from parent zone: {effective_domain})"))
+            details.append(("ℹ️", f"Consider publishing leaf-specific CAA records at {domain} if your CA usage differs from {effective_domain}"))
         else:
-            details.append(("⚠️", "CAA does not explicitly restrict certificate issuance"))
+            details.append(("✅", "CAA record exists"))
+
+        # Deny-all reporting (split regular vs wildcard)
+        if deny_regular and deny_wildcard:
+            details.append(("🔒", 'CAA explicitly blocks ALL certificate issuance (issue ";")'))
+        elif deny_regular:
+            details.append(("🔒", 'CAA blocks regular certificate issuance (issue ";") but allows wildcard certs via issuewild'))
+        elif deny_wildcard:
+            details.append(("🔒", 'CAA blocks wildcard certificate issuance but allows regular certs'))
+        elif has_issue or has_issuewild:
+            details.append(("✅", "CAA restricts issuance to specific Certificate Authorities"))
+        else:
+            details.append(("⚠️", "CAA does not explicitly restrict certificate issuance (missing 'issue' or 'issuewild')"))
+
+        if has_rfc8657:
+            details.append(("✅", "CAA uses advanced account/validation binding (RFC 8657)"))
+
+        # Contact and incident reporting
+        if has_iodef:
+            details.append(("✅", "CAA publishes incident report endpoint (iodef)"))
+        if has_contactemail:
+            details.append(("✅", "CAA publishes contact email"))
+        if has_contactphone:
+            details.append(("✅", "CAA publishes contact phone"))
 
         return details
 
@@ -848,7 +895,7 @@ class SecurityScore:
             "SECURITY_POSTURE": self.posture,
             "SCORE_BREAKDOWN": {
                 category: {
-                    "score": data["score"] if data["score"] is not None else "N/A",
+                    "score": data["score"],  # Keep None as None (stored as SQL NULL)
                     "max": data["max"],
                     "percentage": round(data["score"] / data["max"] * 100)
                     if data["max"] > 0 and data["score"] is not None

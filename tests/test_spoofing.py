@@ -24,7 +24,7 @@ class TestSpoofingVerdicts(unittest.TestCase):
         return Spoofing(
             domain="example.com",
             dmarc_record=dmarc_record,
-            p=p,
+            effective_p=p,  # Passes directly to effective_p in __init__
             aspf=aspf,
             spf_record=spf_record,
             spf_all=spf_all,
@@ -241,7 +241,7 @@ class TestSpoofingVerdicts(unittest.TestCase):
         s = Spoofing(
             domain="sub.example.com",
             dmarc_record="v=DMARC1; p=reject",
-            p="reject", aspf="r",
+            effective_p="reject", aspf="r",
             spf_record="v=spf1 -all", spf_all="-all",
             spf_dns_queries=3, sp=None, pct=None,
         )

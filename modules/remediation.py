@@ -1299,7 +1299,41 @@ class RemediationEngine:
     def _check_caa(self):
         recs = []
         caa_records = self.result.get("CAA_RECORDS", [])
-        
+        caa_error = self.result.get("CAA_ERROR")
+        unknown_crit = self.result.get("CAA_HAS_UNKNOWN_CRITICAL", False)
+        effective_domain = self.result.get("CAA_EFFECTIVE_DOMAIN", self.domain)
+        error_domain = self.result.get("CAA_ERROR_DOMAIN") or self.domain
+        deny_regular = self.result.get("CAA_DENY_ALL_REGULAR", False)
+        deny_wildcard = self.result.get("CAA_DENY_ALL_WILDCARD", False)
+        has_iodef = self.result.get("CAA_HAS_IODEF", False)
+        has_contactemail = self.result.get("CAA_HAS_CONTACTEMAIL", False)
+        has_contactphone = self.result.get("CAA_HAS_CONTACTPHONE", False)
+        has_mx = self.result.get("MX_COUNT", 0) > 0
+
+        if caa_error:
+            recs.append(Recommendation(
+                priority=1,
+                category="CAA",
+                title="CRITICAL OUTAGE: CAA DNS Lookup Failed (SERVFAIL)",
+                description=f"While climbing the DNS tree to find CAA records for {self.domain}, the resolver encountered a SERVFAIL or timeout at {error_domain}.",
+                impact="Per RFC 8659 §6, Certificate Authorities MUST 'fail closed' if they cannot definitively prove the absence of a CAA record. You will not be able to obtain or renew SSL/TLS certificates.",
+                fix=f"Investigate your DNS hosting provider for outages or DNSSEC misconfigurations at {error_domain}.",
+                reference="https://datatracker.ietf.org/doc/html/rfc8659#section-6",
+            ))
+            return recs
+
+        if unknown_crit:
+            recs.append(Recommendation(
+                priority=1,
+                category="CAA",
+                title="CRITICAL: CAA Record contains an Unknown Critical Tag",
+                description=f"A CAA record affecting {self.domain} contains a tag that is not standard, and its Critical flag (Bit 0) is set.",
+                impact="Per RFC 8659 §4.5, if a CA encounters a critical flag on an unknown tag, it MUST NOT issue certificates. Issuance is currently blocked globally.",
+                fix="Remove the Critical flag (set to 0 instead of 128) on the custom CAA tag, or remove the tag entirely if it is no longer needed.",
+                reference="https://datatracker.ietf.org/doc/html/rfc8659#section-4.5",
+            ))
+            return recs
+
         if not caa_records:
             recs.append(Recommendation(
                 priority=4,
@@ -1316,13 +1350,91 @@ class RemediationEngine:
                     "can facilitate man-in-the-middle attacks."
                 ),
                 fix=(
-                    f'{self.domain}.  IN  CAA  0 issue "letsencrypt.org"\n'
-                    f'{self.domain}.  IN  CAA  0 issuewild ";"\n'
-                    "Restrict issuance to only the specific CAs your organization uses."
+                    f'{self.domain}.  IN  CAA  0 issue "letsencrypt.org"\n\n'
+                    "Replace 'letsencrypt.org' with the specific CA your organization uses.\n\n"
+                    "To also block wildcard certificates (strict — use only if you don't issue wildcards):\n"
+                    f'{self.domain}.  IN  CAA  0 issuewild ";"\n\n'
+                    "To allow wildcards from a specific CA:\n"
+                    f'{self.domain}.  IN  CAA  0 issuewild "letsencrypt.org"'
                 ),
                 reference="https://datatracker.ietf.org/doc/html/rfc8659",
                 eli5_explanation="CAA tells the internet exactly which companies are allowed to make 'ID cards' (certificates) for your website. Without it, anyone could trick a careless company into making a fake ID for your site.",
                 business_risk="Attackers could exploit a weaker Certificate Authority to generate a valid certificate for your domain, enabling perfect phishing sites or intercepting secure traffic."
+            ))
+            return recs
+
+        # --- Contextual warnings for domains that HAVE CAA records ---
+
+        # Warn if deny-all is set on a domain with active MX/services
+        if deny_regular and has_mx:
+            recs.append(Recommendation(
+                priority=2,
+                category="CAA",
+                title="CAA blocks all certificate issuance but domain has active MX records",
+                description=(
+                    f'The domain {self.domain} publishes issue ";" which explicitly blocks '
+                    "ALL certificate issuance, yet it has active MX records indicating it "
+                    "handles email. This will prevent TLS certificate renewal."
+                ),
+                impact="MTA-STS, DANE, and HTTPS for webmail/autodiscover will stop working when current certificates expire.",
+                fix=(
+                    f"If this is intentional (no-cert domain), remove the MX records. "
+                    f"Otherwise, replace the deny-all with an explicit authorization:\n"
+                    f'{self.domain}.  IN  CAA  0 issue "your-ca.example"'
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc8659#section-4.2",
+            ))
+
+        # Warn on inherited CAA
+        if effective_domain and effective_domain != self.domain:
+            recs.append(Recommendation(
+                priority=5,
+                category="CAA",
+                title=f"CAA policy inherited from parent zone ({effective_domain})",
+                description=(
+                    f"No CAA records exist at {self.domain} itself. The effective policy is "
+                    f"inherited from {effective_domain} via the RFC 8659 §3 tree walk."
+                ),
+                impact="If your CA usage at this subdomain differs from the parent zone's policy, certificate issuance may fail or be unexpectedly authorized.",
+                fix=(
+                    f"Consider publishing leaf-specific CAA records at {self.domain} "
+                    f"to explicitly control issuance independently of {effective_domain}."
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc8659#section-3",
+            ))
+
+        # Recommend iodef if missing
+        if not has_iodef:
+            recs.append(Recommendation(
+                priority=5,
+                category="CAA",
+                title="No CAA incident reporting endpoint (iodef) configured",
+                description=(
+                    "CAA supports an 'iodef' tag that instructs CAs to send you incident reports "
+                    "when they receive certificate requests that violate your CAA policy."
+                ),
+                impact="Without iodef, unauthorized certificate requests against your domain will go undetected.",
+                fix=(
+                    f'{self.domain}.  IN  CAA  0 iodef "mailto:security@{self.domain}"'
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc8659#section-4.4",
+            ))
+
+        # Recommend contact records if missing
+        if not has_contactemail:
+            recs.append(Recommendation(
+                priority=5,
+                category="CAA",
+                title="No CAA contact email published",
+                description=(
+                    "Publishing a 'contactemail' CAA record provides CAs with a direct "
+                    "security contact for your domain, enabling faster incident response."
+                ),
+                impact="CAs may not be able to reach you quickly in case of a security incident.",
+                fix=(
+                    f'{self.domain}.  IN  CAA  0 contactemail "security@{self.domain}"'
+                ),
+                reference="https://datatracker.ietf.org/doc/html/rfc9495",
             ))
 
         return recs

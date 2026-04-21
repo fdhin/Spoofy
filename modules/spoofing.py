@@ -66,7 +66,7 @@ class Spoofing:
         self,
         domain,
         dmarc_record,
-        p,
+        effective_p,
         aspf,
         spf_record,
         spf_all,
@@ -76,14 +76,14 @@ class Spoofing:
     ):
         self.domain = domain
         self.dmarc_record = dmarc_record
-        self.p = p
+        self.effective_p = effective_p
         # RFC 7489 §6.3: aspf defaults to "r" (relaxed) when absent
         self.aspf = aspf if aspf in ("r", "s") else "r"
         self.spf_record = spf_record
         self.spf_all = spf_all
         self.spf_dns_queries = spf_dns_queries
-        # RFC 7489 §6.3: sp defaults to p when absent
-        self.sp = sp if sp else p
+        # RFC 7489 §6.3: sp defaults to effective_p when absent
+        self.sp = sp if sp else effective_p
         self.pct = self._safe_pct(pct)
         self.domain_type = self.get_domain_type()
         self.spoofable = self.is_spoofable()
@@ -155,7 +155,7 @@ class Spoofing:
 
         # ── DMARC exists but no SPF ──────────────────────────────────
         if not has_spf and has_dmarc:
-            if self.p in ("reject", "quarantine"):
+            if self.effective_p in ("reject", "quarantine"):
                 # DMARC enforcement without SPF: alignment can't pass SPF,
                 # so depends entirely on DKIM. Mailbox-dependent verdict.
                 return VERDICT_MAILBOX_DEP
@@ -164,14 +164,14 @@ class Spoofing:
         # ── SPF record is over the 10-lookup limit ───────────────────
         # RFC 7208 §4.6.4: exceeded limit → PermError → SPF fails
         if self.spf_dns_queries and self.spf_dns_queries > 10:
-            if self.p in ("reject", "quarantine"):
+            if self.effective_p in ("reject", "quarantine"):
                 # DMARC may still enforce via DKIM
                 return VERDICT_MAYBE
             return VERDICT_SPOOFABLE
 
         # ── SPF has multiple 'all' mechanisms (misconfigured) ────────
         if self.spf_all == "2many":
-            if self.p in ("reject", "quarantine"):
+            if self.effective_p in ("reject", "quarantine"):
                 return VERDICT_NOT_SPOOFABLE
             return VERDICT_MAYBE
 
@@ -197,11 +197,11 @@ class Spoofing:
         Returns: "protected", "soft", or "unprotected"
 
         Logic (RFC 7489 §6.3):
-            - p=reject/quarantine + strong SPF → protected
-            - p=reject/quarantine + weak SPF → soft (DKIM may help)
-            - p=none → unprotected (policy says "do nothing")
+            - effective_p=reject/quarantine + strong SPF → protected
+            - effective_p=reject/quarantine + weak SPF → soft (DKIM may help)
+            - effective_p=none → unprotected (policy says "do nothing")
         """
-        if self.p in ("reject", "quarantine"):
+        if self.effective_p in ("reject", "quarantine"):
             if self.spf_all == "-all":
                 return "protected"
             elif self.spf_all in ("~all", "?all"):
@@ -210,7 +210,7 @@ class Spoofing:
                 # spf_all is +all or absent — SPF doesn't help,
                 # but DMARC enforcement is still active via DKIM
                 return "soft"
-        # p=none: receiver is told not to act on failures
+        # effective_p=none: receiver is told not to act on failures
         return "unprotected"
 
     def _assess_subdomain(self):
@@ -273,9 +273,9 @@ class Spoofing:
 
         if not spf_valid and not dmarc_valid:
             return VERDICT_SPOOFABLE
-        if dmarc_valid and self.p in ("reject", "quarantine"):
+        if dmarc_valid and self.effective_p in ("reject", "quarantine"):
             return VERDICT_NOT_SPOOFABLE
-        if dmarc_valid and self.p == "none":
+        if dmarc_valid and self.effective_p == "none":
             return VERDICT_MAYBE
         return VERDICT_MAILBOX_DEP
 
