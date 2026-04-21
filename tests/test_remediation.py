@@ -18,7 +18,7 @@ class TestRemediationEngine(unittest.TestCase):
             "SPF_NUM_DNS_QUERIES": 0,
             "SPF_TOO_MANY_DNS_QUERIES": False,
             "DMARC": None,
-            "DMARC_POLICY": None,
+            "DMARC_EFFECTIVE_POLICY": None,
             "DMARC_PCT": None,
             "DMARC_ASPF": None,
             "DMARC_SP": None,
@@ -129,7 +129,7 @@ class TestRemediationEngine(unittest.TestCase):
         """DMARC p=none should generate a high priority recommendation."""
         result = self._make_result(
             DMARC="v=DMARC1; p=none",
-            DMARC_POLICY="none",
+            DMARC_EFFECTIVE_POLICY="none",
         )
         engine = RemediationEngine(result)
         dmarc_recs = [r for r in engine.recommendations if r.category == "DMARC"]
@@ -141,7 +141,7 @@ class TestRemediationEngine(unittest.TestCase):
         """DMARC p=quarantine should generate a low priority recommendation."""
         result = self._make_result(
             DMARC="v=DMARC1; p=quarantine; rua=mailto:test@test.com",
-            DMARC_POLICY="quarantine",
+            DMARC_EFFECTIVE_POLICY="quarantine",
             DMARC_AGGREGATE_REPORT="mailto:test@test.com",
         )
         engine = RemediationEngine(result)
@@ -154,7 +154,7 @@ class TestRemediationEngine(unittest.TestCase):
         """Missing DMARC rua should generate a recommendation."""
         result = self._make_result(
             DMARC="v=DMARC1; p=reject",
-            DMARC_POLICY="reject",
+            DMARC_EFFECTIVE_POLICY="reject",
         )
         engine = RemediationEngine(result)
         rua_recs = [r for r in engine.recommendations if "rua" in r.title.lower() or "aggregate" in r.title.lower()]
@@ -182,7 +182,7 @@ class TestRemediationEngine(unittest.TestCase):
             SPF_NUM_DNS_QUERIES=3,
             SPF_TOO_MANY_DNS_QUERIES=False,
             DMARC="v=DMARC1; p=reject; rua=mailto:dmarc@test.com; sp=reject",
-            DMARC_POLICY="reject",
+            DMARC_EFFECTIVE_POLICY="reject",
             DMARC_AGGREGATE_REPORT="mailto:dmarc@test.com",
             DMARC_SP="reject",
             DKIM="[*] selector._domainkey.test.com -> v=DKIM1",
@@ -232,7 +232,7 @@ class TestRemediationEngine(unittest.TestCase):
             SPF="v=spf1 -all",
             SPF_MULTIPLE_ALLS="-all",
             DMARC="v=DMARC1; p=reject; rua=mailto:d@t.com; sp=reject",
-            DMARC_POLICY="reject",
+            DMARC_EFFECTIVE_POLICY="reject",
             DMARC_AGGREGATE_REPORT="mailto:d@t.com",
             DMARC_SP="reject",
             DKIM="[*] s._domainkey.t.com -> v=DKIM1",

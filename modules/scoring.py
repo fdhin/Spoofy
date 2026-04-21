@@ -3,7 +3,7 @@
 """
 Weighted scoring engine for email security posture.
 
-Computes a 0-100 score and A+→F letter grade per domain based on:
+Computes a weighted score and A+→F letter grade per domain based on:
   - SPF configuration (16 pts)
   - DMARC configuration (22 pts)
   - DKIM presence & key strength (15 pts) — excluded if not scanned
@@ -15,12 +15,13 @@ Computes a 0-100 score and A+→F letter grade per domain based on:
   - DNSSEC (5 pts)
   - DANE (5 pts)
 
+Maximum raw score is 105 when all features are scanned (90 without DKIM).
 When optional scan features (DKIM, STARTTLS) are disabled, the max
 possible score is reduced proportionally. Posture boundaries use the
 percentage of max, so labels are comparable across scan modes.
 """
 
-from .spf import _is_spf_record
+from .spf import is_spf_record
 
 class SecurityScore:
     """Calculates a weighted security score for a domain's email configuration."""
@@ -127,7 +128,7 @@ class SecurityScore:
             return 5
 
         # Valid syntax — strict check per RFC 7208 §4.5 (+3)
-        if _is_spf_record(spf):
+        if is_spf_record(spf):
             score += 3
 
         # Strong all mechanism: -all (+6), ~all (+4), ?all (+1), +all (0)
@@ -407,7 +408,7 @@ class SecurityScore:
                            "(RFC 7208 §4.5)"))
             return details
 
-        if _is_spf_record(spf):
+        if is_spf_record(spf):
             details.append(("✅", "Valid SPF syntax"))
         else:
             details.append(("❌", "Invalid SPF syntax"))

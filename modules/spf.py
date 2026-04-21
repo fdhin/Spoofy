@@ -35,7 +35,7 @@ logger = logging.getLogger("spoofyvibe.spf")
 _SPF_VERSION_RE = re.compile(r'^v=spf1(?:\s|$)')
 
 
-def _is_spf_record(txt):
+def is_spf_record(txt):
     """Return True if txt is a valid SPF record per RFC 7208 §4.5.
 
     The version tag is case-sensitive ('v=spf1', not 'V=SPF1'), must
@@ -171,7 +171,7 @@ class SPF:
             spf_records = []
             for record in query_result:
                 txt = parse_txt_record(record)
-                if _is_spf_record(txt):
+                if is_spf_record(txt):
                     spf_records.append(txt)
 
             if len(spf_records) > 1:
@@ -308,7 +308,7 @@ class SPF:
             spf_records = []
             for rdata in answers:
                 txt = parse_txt_record(rdata)
-                if _is_spf_record(txt):
+                if is_spf_record(txt):
                     spf_records.append(txt)
 
             if len(spf_records) > 1:
@@ -387,7 +387,7 @@ class SPF:
                         spf_records = []
                         for rdata in answers:
                             txt_record = parse_txt_record(rdata)
-                            if _is_spf_record(txt_record):
+                            if is_spf_record(txt_record):
                                 spf_records.append(txt_record)
 
                         if len(spf_records) > 1:
@@ -430,7 +430,7 @@ class SPF:
                         spf_records = []
                         for rdata in answers:
                             txt_record = parse_txt_record(rdata)
-                            if _is_spf_record(txt_record):
+                            if is_spf_record(txt_record):
                                 spf_records.append(txt_record)
 
                         if len(spf_records) > 1:

@@ -327,7 +327,8 @@ class RemediationEngine:
     def _check_dmarc(self):
         recs = []
         dmarc = self.result.get("DMARC")
-        policy = self.result.get("DMARC_POLICY")
+        policy = self.result.get("DMARC_EFFECTIVE_POLICY")
+        is_org_fallback = self.result.get("DMARC_ORG_DOMAIN_FALLBACK", False)
         pct = self.result.get("DMARC_PCT")
         rua = self.result.get("DMARC_AGGREGATE_REPORT")
         fo = self.result.get("DMARC_FORENSIC_REPORT")
@@ -364,6 +365,17 @@ class RemediationEngine:
             )
             return recs
 
+        # Build context-aware fix prefix for inherited policies
+        if is_org_fallback:
+            policy_source = (
+                f"Note: {self.domain} does not have its own DMARC record — this policy "
+                f"is inherited from the organizational domain. To change it, either:\n"
+                f"  (a) Publish a DMARC record at _dmarc.{self.domain} with a stronger policy, or\n"
+                f"  (b) Strengthen the org domain's p= or sp= tag.\n\n"
+            )
+        else:
+            policy_source = ""
+
         if policy == "none":
             recs.append(
                 Recommendation(
@@ -371,7 +383,7 @@ class RemediationEngine:
                     category="DMARC",
                     title='DMARC policy is "none" — no enforcement',
                     description=(
-                        f"The DMARC policy for {self.domain} is set to 'none', which means "
+                        f"The effective DMARC policy for {self.domain} is 'none', which means "
                         "emails failing authentication are still delivered normally."
                     ),
                     impact=(
@@ -379,6 +391,7 @@ class RemediationEngine:
                         "against spoofing. Attackers can still send emails as your domain."
                     ),
                     fix=(
+                        f"{policy_source}"
                         "Upgrade to 'quarantine' or 'reject' after reviewing DMARC reports:\n\n"
                         f'_dmarc.{self.domain}.  IN  TXT  "v=DMARC1; p=reject; rua=mailto:dmarc-reports@{self.domain}; pct=100"'
                     ),
@@ -395,7 +408,7 @@ class RemediationEngine:
                     category="DMARC",
                     title='DMARC policy is "quarantine" — consider upgrading to "reject"',
                     description=(
-                        f"The DMARC policy for {self.domain} is set to 'quarantine'. "
+                        f"The effective DMARC policy for {self.domain} is 'quarantine'. "
                         "Failing emails are sent to spam/junk rather than rejected outright."
                     ),
                     impact=(
@@ -403,6 +416,7 @@ class RemediationEngine:
                         "emails in their spam folder. Reject is the strongest setting."
                     ),
                     fix=(
+                        f"{policy_source}"
                         f'_dmarc.{self.domain}.  IN  TXT  "v=DMARC1; p=reject; rua=mailto:dmarc-reports@{self.domain}; pct=100"'
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc7489#section-6.3",
@@ -598,17 +612,21 @@ class RemediationEngine:
                         )
                     )
 
-                # Weak keys
-                if bits and bits < 2048:
+                # Weak keys (algorithm-aware — uses dkim.py's is_weak flag)
+                if sel.get("is_weak"):
+                    algo = sel.get("algorithm", "rsa")
                     recs.append(
                         Recommendation(
                             priority=2,
                             category="DKIM",
-                            title=f"DKIM key '{selector_name}' is only {bits}-bit (weak)",
+                            title=f"DKIM key '{selector_name}' is only {bits}-bit {algo.upper()} (weak)",
                             description=(
                                 f"The DKIM selector '{selector_name}' for {self.domain} uses a "
-                                f"{bits}-bit RSA key. Keys shorter than 2048 bits are considered weak "
-                                "and may be factored by determined attackers."
+                                f"{bits}-bit {algo.upper()} key. "
+                                + ("Keys shorter than 2048 bits are considered weak "
+                                   "and may be factored by determined attackers."
+                                   if algo == "rsa" else
+                                   f"This {algo} key length is below the recommended minimum.")
                             ),
                             impact=(
                                 "A weak DKIM key could be broken, allowing attackers to forge "
