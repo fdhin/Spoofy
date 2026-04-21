@@ -63,7 +63,7 @@ def write_to_markdown(data, file_name="output.md"):
 
     for result in data:
         domain = result.get("DOMAIN", "unknown")
-        grade = result.get("SECURITY_GRADE", "?")
+        posture = result.get("SECURITY_POSTURE", "?")
         score = result.get("SECURITY_SCORE", 0)
         spoofable = result.get("SPOOFING_POSSIBLE")
 
@@ -74,7 +74,7 @@ def write_to_markdown(data, file_name="output.md"):
         else:
             spoof_str = "❌ Spoofable"
 
-        lines.append(f"## {domain} — Grade: {grade} ({score}/{result.get('SECURITY_SCORE_MAX', 100)})")
+        lines.append(f"## {domain} — Posture: {posture} ({score}/{result.get('SECURITY_SCORE_MAX', 100)})")
         lines.append("")
         lines.append(f"**Spoofability:** {spoof_str}")
         lines.append("")
@@ -167,7 +167,7 @@ def printer(**kwargs):
     spoofable = kwargs.get("SPOOFING_POSSIBLE")
     spoofing_type = kwargs.get("SPOOFING_TYPE")
     score = kwargs.get("SECURITY_SCORE")
-    grade = kwargs.get("SECURITY_GRADE")
+    posture = kwargs.get("SECURITY_POSTURE")
     recommendations = kwargs.get("RECOMMENDATIONS", [])
 
     output_message("[*]", f"Domain: {domain}", "indifferent")
@@ -175,9 +175,9 @@ def printer(**kwargs):
     output_message("[*]", f"DNS Server: {dns_server}", "indifferent")
 
     # Security Score
-    if score is not None and grade is not None:
-        grade_level = "good" if score >= 80 else "warning" if score >= 60 else "bad"
-        output_message("[*]", f"Security Score: {score}/100 (Grade: {grade})", grade_level)
+    if score is not None and posture is not None:
+        posture_level = "good" if score >= 80 else "warning" if score >= 60 else "bad"
+        output_message("[*]", f"Security Score: {score}/100 (Posture: {posture})", posture_level)
 
     if spf_record:
         output_message("[*]", f"SPF record: {spf_record}", "info")

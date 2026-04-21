@@ -15,24 +15,16 @@ import html
 from datetime import datetime
 
 
-def _grade_color(grade):
-    """Return CSS color for a letter grade."""
+def _posture_color(posture):
+    """Return CSS color for a security posture."""
     colors = {
-        "A+": "#00e676",
-        "A": "#00e676",
-        "A-": "#66bb6a",
-        "B+": "#8bc34a",
-        "B": "#cddc39",
-        "B-": "#ffeb3b",
-        "C+": "#ffc107",
-        "C": "#ff9800",
-        "C-": "#ff7043",
-        "D+": "#f44336",
-        "D": "#e53935",
-        "D-": "#c62828",
-        "F": "#b71c1c",
+        "Excellent": "#00e676",
+        "Good": "#8bc34a",
+        "Moderate": "#ff9800",
+        "Weak": "#f44336",
+        "Critical Risk": "#b71c1c",
     }
-    return colors.get(grade, "#9e9e9e")
+    return colors.get(posture, "#9e9e9e")
 
 
 def _priority_color(priority):
@@ -123,9 +115,9 @@ def _build_remediation_card(rec):
 def _build_domain_card(result):
     """Build a complete domain card."""
     domain = result.get("DOMAIN", "unknown")
-    grade = result.get("SECURITY_GRADE", "?")
+    posture = result.get("SECURITY_POSTURE", "?")
     score = result.get("SECURITY_SCORE", 0)
-    grade_col = _grade_color(grade)
+    posture_col = _posture_color(posture)
     spoofable = result.get("SPOOFING_POSSIBLE")
     spoof_type = result.get("SPOOFING_TYPE", "")
     breakdown = result.get("SCORE_BREAKDOWN", {})
@@ -283,9 +275,9 @@ def _build_domain_card(result):
     </div>"""
 
     return f"""
-  <div class="domain-card" data-grade="{grade}" data-score="{score}" data-domain="{_esc(domain)}">
+  <div class="domain-card" data-posture="{posture}" data-score="{score}" data-domain="{_esc(domain)}">
     <div class="card-header">
-      <div class="grade-badge" style="background:{grade_col};">{grade}</div>
+      <div class="posture-badge" style="background:{posture_col};">{posture}</div>
       <div class="card-title">
         <h2>{_esc(domain)}</h2>
         <div class="card-meta">
@@ -315,11 +307,12 @@ def generate_html_report(results, filename="output.html"):
     Generate a self-contained HTML report.
 
     Args:
-        results: list of result dicts (with SECURITY_SCORE, SECURITY_GRADE,
+        results: list of result dicts (with SECURITY_SCORE, SECURITY_POSTURE,
                  SCORE_BREAKDOWN, SCORE_DETAILS, RECOMMENDATIONS keys)
         filename: output file path
     """
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    from datetime import timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # Compute executive summary stats
     total = len(results)
@@ -335,17 +328,17 @@ def generate_html_report(results, filename="output.html"):
         1 for r in results if r.get("SPOOFING_POSSIBLE") is False
     )
 
-    # Grade distribution
-    grade_counts = {}
+    # Posture distribution
+    posture_counts = {}
     for r in results:
-        g = r.get("SECURITY_GRADE", "?")
-        grade_counts[g] = grade_counts.get(g, 0) + 1
+        p = r.get("SECURITY_POSTURE", "?")
+        posture_counts[p] = posture_counts.get(p, 0) + 1
 
-    grade_dist_items = ""
-    for g in ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F"]:
-        count = grade_counts.get(g, 0)
+    posture_dist_items = ""
+    for p in ["Excellent", "Good", "Moderate", "Weak", "Critical Risk"]:
+        count = posture_counts.get(p, 0)
         if count > 0:
-            grade_dist_items += f'<span class="grade-pill" style="background:{_grade_color(g)};">{g}: {count}</span> '
+            posture_dist_items += f'<span class="posture-pill" style="background:{_posture_color(p)};">{p}: {count}</span> '
 
     # Total recommendation counts by priority
     all_recs = []
@@ -357,34 +350,18 @@ def generate_html_report(results, filename="output.html"):
     # Build domain cards
     domain_cards = "\n".join(_build_domain_card(r) for r in results)
 
-    # Compute an overall average grade
-    # Use the same grade boundaries as SecurityScore for consistency
-    if avg_score >= 97:
-        avg_grade = "A+"
-    elif avg_score >= 93:
-        avg_grade = "A"
-    elif avg_score >= 90:
-        avg_grade = "A-"
-    elif avg_score >= 87:
-        avg_grade = "B+"
-    elif avg_score >= 83:
-        avg_grade = "B"
+    # Compute an overall average posture
+    # Use the same posture boundaries as SecurityScore for consistency
+    if avg_score >= 90:
+        avg_posture = "Excellent"
     elif avg_score >= 80:
-        avg_grade = "B-"
-    elif avg_score >= 77:
-        avg_grade = "C+"
-    elif avg_score >= 73:
-        avg_grade = "C"
-    elif avg_score >= 70:
-        avg_grade = "C-"
-    elif avg_score >= 67:
-        avg_grade = "D+"
-    elif avg_score >= 63:
-        avg_grade = "D"
+        avg_posture = "Good"
     elif avg_score >= 60:
-        avg_grade = "D-"
+        avg_posture = "Moderate"
+    elif avg_score >= 40:
+        avg_posture = "Weak"
     else:
-        avg_grade = "F"
+        avg_posture = "Critical Risk"
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -800,8 +777,8 @@ def generate_html_report(results, filename="output.html"):
     <div class="label">Domains Scanned</div>
   </div>
   <div class="summary-card">
-    <div class="big-number" style="color:{_grade_color(avg_grade)};">{avg_grade}</div>
-    <div class="label">Average Grade ({avg_score}/100)</div>
+    <div class="big-number" style="color:{_posture_color(avg_posture)};">{avg_posture}</div>
+    <div class="label">Average Posture ({avg_score}/100)</div>
   </div>
   <div class="summary-card">
     <div class="big-number" style="color:var(--red);">{spoofable_count}</div>
@@ -821,20 +798,20 @@ def generate_html_report(results, filename="output.html"):
   </div>
 </div>
 
-<div class="grade-dist">
-  <span class="dist-label">Grade Distribution:</span>
-  {grade_dist_items if grade_dist_items else '<span style="color:var(--text-muted);">No results</span>'}
+<div class="posture-dist">
+  <span class="dist-label">Posture Distribution:</span>
+  {posture_dist_items if posture_dist_items else '<span style="color:var(--text-muted);">No results</span>'}
 </div>
 
 <div class="controls">
   <input type="text" id="searchInput" placeholder="🔍 Search domains..." oninput="filterDomains()">
-  <select id="gradeFilter" onchange="filterDomains()">
-    <option value="">All Grades</option>
-    <option value="A">A+ / A / A-</option>
-    <option value="B">B+ / B / B-</option>
-    <option value="C">C+ / C / C-</option>
-    <option value="D">D+ / D / D-</option>
-    <option value="F">F</option>
+  <select id="postureFilter" onchange="filterDomains()">
+    <option value="">All Postures</option>
+    <option value="Excellent">Excellent</option>
+    <option value="Good">Good</option>
+    <option value="Moderate">Moderate</option>
+    <option value="Weak">Weak</option>
+    <option value="Critical Risk">Critical Risk</option>
   </select>
   <select id="sortBy" onchange="sortDomains()">
     <option value="score-asc">Sort: Score ↑ (worst first)</option>
@@ -855,15 +832,15 @@ def generate_html_report(results, filename="output.html"):
 <script>
 function filterDomains() {{
   const search = document.getElementById('searchInput').value.toLowerCase();
-  const gradeFilter = document.getElementById('gradeFilter').value;
+  const postureFilter = document.getElementById('postureFilter').value;
   const cards = document.querySelectorAll('.domain-card');
 
   cards.forEach(card => {{
     const domain = card.dataset.domain.toLowerCase();
-    const grade = card.dataset.grade;
+    const posture = card.dataset.posture;
     const matchSearch = !search || domain.includes(search);
-    const matchGrade = !gradeFilter || grade.startsWith(gradeFilter);
-    card.style.display = (matchSearch && matchGrade) ? '' : 'none';
+    const matchPosture = !postureFilter || posture === postureFilter;
+    card.style.display = (matchSearch && matchPosture) ? '' : 'none';
   }});
 }}
 

@@ -31,12 +31,12 @@ class TestScanHistory(unittest.TestCase):
                 os.remove(p)
         os.rmdir(self.tmpdir)
 
-    def _make_result(self, domain="test.com", score=75, grade="B-", spoofable=False, **overrides):
+    def _make_result(self, domain="test.com", score=75, posture="Moderate", spoofable=False, **overrides):
         """Create a minimal scan result dict."""
         result = {
             "DOMAIN": domain,
             "SECURITY_SCORE": score,
-            "SECURITY_GRADE": grade,
+            "SECURITY_POSTURE": posture,
             "SPOOFING_POSSIBLE": spoofable,
             "SCORE_BREAKDOWN": {
                 "spf": {"score": 20, "max": 20},
@@ -79,13 +79,13 @@ class TestScanHistory(unittest.TestCase):
 
     def test_save_scan_stores_data(self):
         """Saved scan should be retrievable."""
-        result = self._make_result(domain="example.org", score=90, grade="A")
+        result = self._make_result(domain="example.org", score=90, posture="Excellent")
         row_id = self.history.save_scan(result)
         detail = self.history.get_scan_detail(row_id)
         self.assertIsNotNone(detail)
         self.assertEqual(detail["domain"], "example.org")
         self.assertEqual(detail["score"], 90)
-        self.assertEqual(detail["grade"], "A")
+        self.assertEqual(detail["posture"], "Excellent")
 
     def test_save_spoofable_true(self):
         """Spoofable=True should be stored as 1."""

@@ -60,7 +60,7 @@ class ScanHistory:
                     domain TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     score INTEGER NOT NULL,
-                    grade TEXT NOT NULL,
+                    posture TEXT NOT NULL,
                     spoofable INTEGER,
                     spf_score INTEGER,
                     dmarc_score INTEGER,
@@ -126,7 +126,7 @@ class ScanHistory:
         """
         domain = result.get("DOMAIN", "unknown")
         score = result.get("SECURITY_SCORE", 0)
-        grade = result.get("SECURITY_GRADE", "?")
+        posture = result.get("SECURITY_POSTURE", "?")
         spoofable = result.get("SPOOFING_POSSIBLE")
         breakdown = result.get("SCORE_BREAKDOWN", {})
 
@@ -144,7 +144,7 @@ class ScanHistory:
         try:
             cursor = conn.execute(
                 """INSERT INTO scans
-                   (domain, timestamp, score, grade, spoofable,
+                   (domain, timestamp, score, posture, spoofable,
                     spf_score, dmarc_score, dkim_score, bimi_score,
                     spoof_score, mta_sts_score, mx_score, dnssec_score,
                     caa_score, result_json)
@@ -153,7 +153,7 @@ class ScanHistory:
                     domain,
                     timestamp,
                     score,
-                    grade,
+                    posture,
                     spoofable_int,
                     breakdown.get("spf", {}).get("score", 0),
                     breakdown.get("dmarc", {}).get("score", 0),
@@ -182,7 +182,7 @@ class ScanHistory:
             for result in results:
                 domain = result.get("DOMAIN", "unknown")
                 score = result.get("SECURITY_SCORE", 0)
-                grade = result.get("SECURITY_GRADE", "?")
+                posture = result.get("SECURITY_POSTURE", "?")
                 spoofable = result.get("SPOOFING_POSSIBLE")
                 breakdown = result.get("SCORE_BREAKDOWN", {})
                 spoofable_int = 1 if spoofable is True else (0 if spoofable is False else -1)
@@ -190,13 +190,13 @@ class ScanHistory:
 
                 cursor = conn.execute(
                     """INSERT INTO scans
-                       (domain, timestamp, score, grade, spoofable,
+                       (domain, timestamp, score, posture, spoofable,
                         spf_score, dmarc_score, dkim_score, bimi_score,
                         spoof_score, mta_sts_score, mx_score, dnssec_score,
                         caa_score, result_json)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        domain, timestamp, score, grade, spoofable_int,
+                        domain, timestamp, score, posture, spoofable_int,
                         breakdown.get("spf", {}).get("score", 0),
                         breakdown.get("dmarc", {}).get("score", 0),
                         breakdown.get("dkim", {}).get("score", 0),
@@ -227,7 +227,7 @@ class ScanHistory:
         try:
             if domain_filter:
                 rows = conn.execute(
-                    """SELECT id, domain, timestamp, score, grade, spoofable,
+                    """SELECT id, domain, timestamp, score, posture, spoofable,
                               spf_score, dmarc_score, dkim_score, bimi_score,
                               spoof_score, mta_sts_score, mx_score, dnssec_score
                        FROM scans WHERE domain LIKE ?
@@ -236,7 +236,7 @@ class ScanHistory:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """SELECT id, domain, timestamp, score, grade, spoofable,
+                    """SELECT id, domain, timestamp, score, posture, spoofable,
                               spf_score, dmarc_score, dkim_score, bimi_score,
                               spoof_score, mta_sts_score, mx_score, dnssec_score,
                               caa_score
@@ -268,7 +268,7 @@ class ScanHistory:
         conn = self._get_conn()
         try:
             rows = conn.execute(
-                """SELECT id, domain, timestamp, score, grade, spoofable,
+                """SELECT id, domain, timestamp, score, posture, spoofable,
                           spf_score, dmarc_score, dkim_score, bimi_score,
                           spoof_score, mta_sts_score, mx_score, dnssec_score,
                           caa_score
@@ -285,12 +285,12 @@ class ScanHistory:
         Get score trend data for a domain (oldest first, for charting).
 
         Returns:
-            list of dicts with timestamp, score, grade
+            list of dicts with timestamp, score, posture
         """
         conn = self._get_conn()
         try:
             rows = conn.execute(
-                """SELECT timestamp, score, grade,
+                """SELECT timestamp, score, posture,
                           spf_score, dmarc_score, dkim_score, bimi_score,
                           spoof_score, mta_sts_score, mx_score, dnssec_score,
                           caa_score

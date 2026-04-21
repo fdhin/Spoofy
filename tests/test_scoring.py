@@ -106,14 +106,14 @@ class TestSecurityScore(unittest.TestCase):
         )
         score = SecurityScore(result)
         self.assertEqual(score.score, 105)
-        self.assertEqual(score.grade, "A+")
+        self.assertEqual(score.posture, "Excellent")
 
     def test_no_records_gets_f(self):
         """A domain with nothing configured should get F."""
         result = self._make_result()
         score = SecurityScore(result)
         self.assertEqual(score.score, 0)
-        self.assertEqual(score.grade, "F")
+        self.assertEqual(score.posture, "Critical Risk")
 
     def test_spf_only_domain(self):
         """A domain with only SPF (hard fail) should get partial credit."""
@@ -240,28 +240,26 @@ class TestSecurityScore(unittest.TestCase):
         self.assertIn("SECURITY_SCORE", d)
         self.assertIn("SECURITY_SCORE_MAX", d)
         self.assertIn("SECURITY_SCORE_PCT", d)
-        self.assertIn("SECURITY_GRADE", d)
+        self.assertIn("SECURITY_POSTURE", d)
         self.assertIn("SCORE_BREAKDOWN", d)
         self.assertIn("SCORE_DETAILS", d)
 
-    def test_grade_boundaries(self):
-        """Test various score → grade mappings."""
+    def test_posture_boundaries(self):
+        """Test various score → posture mappings."""
         result = self._make_result()
         score = SecurityScore(result)
-        # Grade boundaries are percentage-based: score / max_score * 100
+        # Posture boundaries are percentage-based: score / max_score * 100
         # With max_score=105:
-        score.score = 100  # 95.2% → A+
-        self.assertEqual(score._calculate_grade(), "A+")
-        score.score = 95   # 90.5% → A
-        self.assertEqual(score._calculate_grade(), "A")
-        score.score = 85   # 80.9% → B+
-        self.assertEqual(score._calculate_grade(), "B+")
-        score.score = 75   # 71.4% → B-
-        self.assertEqual(score._calculate_grade(), "B-")
-        score.score = 58   # 55.2% → C-
-        self.assertEqual(score._calculate_grade(), "C-")
-        score.score = 30   # 28.6% → F
-        self.assertEqual(score._calculate_grade(), "F")
+        score.score = 100  # 95.2% → Excellent
+        self.assertEqual(score._calculate_posture(), "Excellent")
+        score.score = 85   # 80.9% → Good
+        self.assertEqual(score._calculate_posture(), "Good")
+        score.score = 75   # 71.4% → Moderate
+        self.assertEqual(score._calculate_posture(), "Moderate")
+        score.score = 58   # 55.2% → Weak
+        self.assertEqual(score._calculate_posture(), "Weak")
+        score.score = 30   # 28.6% → Critical Risk
+        self.assertEqual(score._calculate_posture(), "Critical Risk")
 
     def test_bimi_with_authority_scores_full(self):
         """BIMI with both location and authority should get full 5 points."""

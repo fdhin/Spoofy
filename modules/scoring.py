@@ -16,8 +16,8 @@ Computes a 0-100 score and A+→F letter grade per domain based on:
   - DANE (5 pts)
 
 When optional scan features (DKIM, STARTTLS) are disabled, the max
-possible score is reduced proportionally. Grade boundaries use the
-percentage of max, so grades are comparable across scan modes.
+possible score is reduced proportionally. Posture boundaries use the
+percentage of max, so labels are comparable across scan modes.
 """
 
 from .spf import _is_spf_record
@@ -25,21 +25,13 @@ from .spf import _is_spf_record
 class SecurityScore:
     """Calculates a weighted security score for a domain's email configuration."""
 
-    # Grade boundaries
-    GRADE_BOUNDARIES = [
-        (95, "A+"),
-        (90, "A"),
-        (85, "A-"),
-        (80, "B+"),
-        (75, "B"),
-        (70, "B-"),
-        (65, "C+"),
-        (60, "C"),
-        (55, "C-"),
-        (50, "D+"),
-        (45, "D"),
-        (40, "D-"),
-        (0, "F"),
+    # Posture boundaries (Percentage of Max Score -> Posture Label)
+    POSTURE_BOUNDARIES = [
+        (90, "Excellent"),
+        (80, "Good"),
+        (60, "Moderate"),
+        (40, "Weak"),
+        (0, "Critical Risk"),
     ]
 
     def __init__(self, result):
@@ -53,7 +45,7 @@ class SecurityScore:
         self.result = result
         self.breakdown = {}
         self.score = self._calculate_score()
-        self.grade = self._calculate_grade()
+        self.posture = self._calculate_posture()
 
     def _calculate_score(self):
         """Calculate the total weighted score.
@@ -393,18 +385,18 @@ class SecurityScore:
 
         return min(score, 5)
 
-    def _calculate_grade(self):
-        """Convert numeric score to letter grade.
+    def _calculate_posture(self):
+        """Convert numeric score to security posture label.
 
-        Uses percentage of max_score so grades are comparable across
+        Uses percentage of max_score so labels are comparable across
         scan modes (e.g. with/without --dkim).
         """
         max_score = getattr(self, "max_score", 100) or 100
         pct = (self.score / max_score) * 100
-        for threshold, grade in self.GRADE_BOUNDARIES:
+        for threshold, posture in self.POSTURE_BOUNDARIES:
             if pct >= threshold:
-                return grade
-        return "F"
+                return posture
+        return "Critical Risk"
 
     # --- Detail strings for breakdown ---
 
@@ -853,7 +845,7 @@ class SecurityScore:
             "SECURITY_SCORE": self.score,
             "SECURITY_SCORE_MAX": max_score,
             "SECURITY_SCORE_PCT": round(self.score / max_score * 100) if max_score > 0 else 0,
-            "SECURITY_GRADE": self.grade,
+            "SECURITY_POSTURE": self.posture,
             "SCORE_BREAKDOWN": {
                 category: {
                     "score": data["score"] if data["score"] is not None else "N/A",
@@ -873,7 +865,7 @@ class SecurityScore:
     def __str__(self):
         max_score = getattr(self, "max_score", 100) or 100
         lines = [
-            f"Security Score: {self.score}/{max_score} ({self.grade})",
+            f"Security Score: {self.score}/{max_score} ({self.posture})",
             "",
         ]
         for category, data in self.breakdown.items():
