@@ -308,23 +308,23 @@ class SecurityScore:
             return 10
 
         score = 0
-        mta_sts_txt = self.result.get("MTA_STS_TXT")
-        mta_sts_mode = self.result.get("MTA_STS_MODE")
-        tls_rpt = self.result.get("TLS_RPT_RECORD")
 
-        # MTA-STS TXT exists (+2)
-        if mta_sts_txt:
-            score += 2
+        # 1. Score MTA-STS (up to 7 points) — permerror zeroes only this part
+        if not self.result.get("MTA_STS_PERMERROR", False):
+            mta_sts_txt = self.result.get("MTA_STS_TXT")
+            mta_sts_mode = self.result.get("MTA_STS_MODE")
 
-            # Policy mode: enforce (+5), testing (+3), none (+0)
-            if mta_sts_mode == "enforce":
-                score += 5
-            elif mta_sts_mode == "testing":
+            if mta_sts_txt:
+                score += 2
+                if mta_sts_mode == "enforce":
+                    score += 5
+                elif mta_sts_mode == "testing":
+                    score += 3
+
+        # 2. Score TLS-RPT (up to 3 points) independently
+        if not self.result.get("TLS_RPT_PERMERROR", False):
+            if self.result.get("TLS_RPT_RECORD"):
                 score += 3
-
-        # TLS-RPT configured (+3)
-        if tls_rpt:
-            score += 3
 
         return min(score, 10)
 
@@ -665,7 +665,10 @@ class SecurityScore:
         tls_rpt = self.result.get("TLS_RPT_RECORD")
         tls_rpt_rua = self.result.get("TLS_RPT_RUA")
 
-        if not mta_sts_txt:
+        # PermError: multiple TXT records invalidate the policy
+        if self.result.get("MTA_STS_PERMERROR"):
+            details.append(("❌", "CRITICAL: Multiple MTA-STS TXT records published — MTAs will ignore the policy entirely"))
+        elif not mta_sts_txt:
             details.append(("⚠️", "No MTA-STS record found"))
         else:
             details.append(("✅", "MTA-STS TXT record exists"))
@@ -685,7 +688,9 @@ class SecurityScore:
                 else:
                     details.append(("⚠️", f"Max age: {max_age}s (consider ≥ 86400)"))
 
-        if tls_rpt:
+        if self.result.get("TLS_RPT_PERMERROR"):
+            details.append(("❌", "CRITICAL: Multiple TLS-RPT TXT records published — senders will abort reporting"))
+        elif tls_rpt:
             details.append(("✅", f"TLS-RPT configured"))
             if tls_rpt_rua:
                 details.append(("✅", f"TLS reports sent to: {tls_rpt_rua}"))

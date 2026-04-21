@@ -748,7 +748,30 @@ class RemediationEngine:
         max_age = self.result.get("MTA_STS_MAX_AGE")
         tls_rpt = self.result.get("TLS_RPT_RECORD")
 
-        if not mta_sts_txt:
+        # ---- 1. MTA-STS Evaluation ----
+        if self.result.get("MTA_STS_PERMERROR"):
+            recs.append(
+                Recommendation(
+                    priority=1,
+                    category="MTA-STS",
+                    title="Multiple MTA-STS TXT records found (PermError)",
+                    description=(
+                        f"The domain {self.domain} has published more than one "
+                        "_mta-sts TXT record starting with 'v=STSv1'."
+                    ),
+                    impact=(
+                        "Per RFC 8461 §3.1, senders MUST assume the domain does "
+                        "not have an available MTA-STS policy. Your MTA-STS "
+                        "deployment is functionally disabled."
+                    ),
+                    fix=(
+                        "Consolidate your MTA-STS TXT records into a single "
+                        "record starting with 'v=STSv1;'."
+                    ),
+                    reference="https://datatracker.ietf.org/doc/html/rfc8461#section-3.1",
+                )
+            )
+        elif not mta_sts_txt:
             recs.append(
                 Recommendation(
                     priority=4,
@@ -776,7 +799,10 @@ class RemediationEngine:
                 )
             )
         else:
-            if mta_sts_mode == "testing":
+            # TXT record exists — evaluate the HTTPS policy
+            if mta_sts_mode == "enforce":
+                pass  # Optimal configuration
+            elif mta_sts_mode == "testing":
                 recs.append(
                     Recommendation(
                         priority=4,
@@ -809,6 +835,32 @@ class RemediationEngine:
                         reference="https://datatracker.ietf.org/doc/html/rfc8461#section-5",
                     )
                 )
+            elif not mta_sts_mode:
+                # TXT record exists but HTTPS policy is unreachable, timed out,
+                # or contains syntax errors (e.g. missing 'version: STSv1').
+                recs.append(
+                    Recommendation(
+                        priority=1,
+                        category="MTA-STS",
+                        title="MTA-STS policy file is missing, invalid, or unreachable",
+                        description=(
+                            f"The domain {self.domain} has a valid MTA-STS TXT record, but "
+                            f"the policy file at https://mta-sts.{self.domain}/.well-known/mta-sts.txt "
+                            "could not be fetched or contained syntax errors."
+                        ),
+                        impact=(
+                            "Receiving MTAs will see the TXT record but fail to load the policy. "
+                            "This represents a broken deployment. MTAs will fall back to plaintext "
+                            "or delay mail depending on their cache state."
+                        ),
+                        fix=(
+                            "Ensure a valid policy file is hosted at the exact HTTPS URL, served "
+                            "with Content-Type 'text/plain', and contains at minimum 'version: STSv1', "
+                            "'mode', 'max_age', and 'mx' keys."
+                        ),
+                        reference="https://datatracker.ietf.org/doc/html/rfc8461#section-3.3",
+                    )
+                )
 
             if max_age and isinstance(max_age, int) and max_age < 86400:
                 recs.append(
@@ -826,7 +878,29 @@ class RemediationEngine:
                     )
                 )
 
-        if not tls_rpt:
+        # ---- 2. TLS-RPT Evaluation (independent of MTA-STS) ----
+        if self.result.get("TLS_RPT_PERMERROR"):
+            recs.append(
+                Recommendation(
+                    priority=2,
+                    category="TLS-RPT",
+                    title="Multiple TLS-RPT TXT records found (PermError)",
+                    description=(
+                        f"The domain {self.domain} has published more than one "
+                        "_smtp._tls TXT record starting with 'v=TLSRPTv1'."
+                    ),
+                    impact=(
+                        "Per RFC 8460 §3, senders MUST assume the domain does "
+                        "not have a reporting policy."
+                    ),
+                    fix=(
+                        "Consolidate your TLS-RPT TXT records into a single "
+                        "record starting with 'v=TLSRPTv1;'."
+                    ),
+                    reference="https://datatracker.ietf.org/doc/html/rfc8460#section-3",
+                )
+            )
+        elif not tls_rpt:
             recs.append(
                 Recommendation(
                     priority=4,
