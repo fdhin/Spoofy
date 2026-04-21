@@ -64,8 +64,8 @@ SpoofyVibe is a comprehensive email security posture analysis tool. Where the or
 - **Spoofability** — Real-world tested SPF+DMARC combination logic
 
 ### 📊 Intelligence
-- **Security Scoring** — 0–100 composite score across 9 weighted categories:
-  - SPF (16pts), DMARC (22pts), DKIM (15pts), BIMI (5pts), CAA (5pts), Spoof Resistance (15pts), MTA-STS (10pts), MX (7pts), DNSSEC (5pts)
+- **Security Scoring** — 0–100 composite percentage score based on up to 105 raw points across 10 weighted categories:
+  - SPF (16pts), DMARC (22pts), DKIM (15pts), BIMI (5pts), CAA (5pts), Spoof Resistance (15pts), MTA-STS (10pts), MX (7pts), DNSSEC (5pts), DANE (5pts)
 - **Letter Grades** — A+ through F with +/- modifiers
 - **ELI5 Remediation Engine** — Prioritized recommendations (Critical → Info) with category tagging, **Explain-Like-I'm-5 layperson translations**, **Business Risk summaries**, and provider-specific guided fixes (e.g. detailed setup paths for M365).
 - **Scan History** — SQLite database with trend analysis, per-domain history, aggregate stats
@@ -198,7 +198,7 @@ Options:
 
 ## Scoring System
 
-Each domain receives a score out of 100 across 8 categories:
+Each domain receives a percentage score (0-100) based on up to 105 raw points across 10 categories:
 
 | Category | Max Points | What's Measured |
 |----------|-----------|-----------------|
@@ -211,6 +211,7 @@ Each domain receives a score out of 100 across 8 categories:
 | MTA-STS | 10 | Policy exists, `enforce` mode, TLS-RPT |
 | MX | 7 | Records exist, STARTTLS, multiple MX |
 | DNSSEC | 5 | DNSKEY records present, DS chain of trust verified |
+| DANE | 5 | TLSA records present, matching MX hosts, valid certificate bindings |
 
 Grades: **A+** (95+), **A** (90+), **B+** (85+), **B** (80+), **B-** (75+), **C+** (65+), **C** (55+), **C-** (45+), **D+** (35+), **D** (25+), **D-** (15+), **F** (<15)
 
@@ -238,25 +239,31 @@ SpoofyVibe/
 │   ├── dnssec.py          # DNSSEC (DNSKEY + DS) detection
 │   ├── dane.py            # DANE/TLSA per-MX-host detection
 │   ├── m365.py            # M365 tenant discovery
-│   ├── scoring.py         # Security scoring engine (8 categories)
+│   ├── scoring.py         # Security scoring engine (10 categories)
 │   ├── remediation.py     # Remediation advice engine
 │   ├── history.py         # SQLite scan history
 │   ├── subdomain.py       # crt.sh subdomain discovery
+│   ├── caa.py             # CAA record validation
+│   ├── spoofing.py        # Spoofability logic
+│   ├── txt_utils.py       # TXT record utilities
 │   ├── html_report.py     # Interactive HTML report generator
 │   ├── pdf_report.py      # PDF executive report generator
 │   ├── report.py          # CSV / Excel / JSON / Markdown output
 │   └── syntax.py          # SPF/DMARC parsing helpers
 ├── tests/
-│   ├── test_scoring.py    # Scoring engine tests (16)
-│   ├── test_remediation.py # Remediation engine tests (18)
-│   ├── test_mta_sts.py    # MTA-STS tests (14)
-│   ├── test_mx.py         # MX module tests (15)
-│   ├── test_dnssec.py     # DNSSEC module tests (14)
-│   ├── test_dane.py       # DANE/TLSA module tests (18)
-│   ├── test_m365.py       # M365 tenant tests (16)
-│   ├── test_history.py    # History module tests (22)
-│   ├── test_subdomain.py  # Subdomain module tests (14)
-│   └── test_spoofy.py     # Original Spoofy logic tests (30)
+│   ├── test_scoring.py    # Scoring engine tests (22)
+│   ├── test_remediation.py # Remediation engine tests (20)
+│   ├── test_mta_sts.py    # MTA-STS tests (44)
+│   ├── test_mx.py         # MX module tests (16)
+│   ├── test_dnssec.py     # DNSSEC module tests (26)
+│   ├── test_dane.py       # DANE/TLSA module tests (32)
+│   ├── test_m365.py       # M365 tenant tests (17)
+│   ├── test_history.py    # History module tests (21)
+│   ├── test_subdomain.py  # Subdomain module tests (15)
+│   ├── test_caa.py        # CAA module tests (40)
+│   ├── test_dkim.py       # DKIM module tests (62)
+│   ├── test_dmarc.py      # DMARC module tests (25)
+│   └── test_spoofing.py   # Spoofability logic tests (42)
 ├── requirements.txt
 └── LICENSE
 ```
@@ -264,13 +271,13 @@ SpoofyVibe/
 ## Tests
 
 ```bash
-# Run all 151 tests
+# Run all 382 tests
 python3 -m unittest discover -s tests -p "test*.py" -v
 ```
 
 ## 🍝 Vibe Coded
 
-This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, ELI5 remediation, MTA-STS, MX analysis, DNSSEC, DANE, CAA, M365 tenant discovery, boardroom PDF reports, async rewrite, web dashboard, history, subdomain discovery, the 151 tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
+This project was heavily **vibe coded** — built collaboratively with AI assistance. The original Spoofy foundation is solid human-crafted work by Matt Keeley and contributors. The extensions (scoring, ELI5 remediation, MTA-STS, MX analysis, DNSSEC, DANE, CAA, M365 tenant discovery, boardroom PDF reports, async rewrite, web dashboard, history, subdomain discovery, the 382 tests, and this README) were developed through AI pair programming. The spaghetti code badge from the original repo has never been more appropriate.
 
 ## Credits
 
