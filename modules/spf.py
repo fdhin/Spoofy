@@ -1,5 +1,7 @@
 # modules/spf.py
 
+from .dns_utils import encode_idna as _encode_idna
+
 """
 SPF (Sender Policy Framework) record discovery and analysis.
 
@@ -45,23 +47,6 @@ def is_spf_record(txt):
     return bool(_SPF_VERSION_RE.match(txt))
 
 
-def _encode_idna(domain):
-    """Encode a domain to IDNA A-label form per RFC 7208 §4.3.
-
-    Internationalized domain names MUST be encoded as A-labels
-    (Punycode) before DNS queries.  ASCII-only domains pass through
-    unchanged.  Returns the encoded domain or None on failure.
-    """
-    try:
-        return domain.encode("idna").decode("ascii")
-    except (UnicodeError, UnicodeDecodeError):
-        # Already ASCII or invalid — try as-is
-        try:
-            domain.encode("ascii")
-            return domain
-        except UnicodeEncodeError:
-            logger.warning("Cannot IDNA-encode domain: %s", domain)
-            return None
 
 
 # RFC 7208 §7.1: Valid macro letters (case-insensitive).

@@ -14,8 +14,8 @@ class TestSecurityScore(unittest.TestCase):
             "DOMAIN_TYPE": "domain",
             "DNS_SERVER": "1.1.1.1",
             "SPF": None,
-            "SPF_MULTIPLE_ALLS": None,
-            "SPF_NUM_DNS_QUERIES": 0,
+            "SPF_ALL": None,
+            "SPF_DNS_QUERY_COUNT": 0,
             "SPF_TOO_MANY_DNS_QUERIES": False,
             "DMARC": None,
             "DMARC_POLICY": None,
@@ -59,8 +59,8 @@ class TestSecurityScore(unittest.TestCase):
         """A domain with all perfect settings should get A+."""
         result = self._make_result(
             SPF="v=spf1 include:_spf.google.com -all",
-            SPF_MULTIPLE_ALLS="-all",
-            SPF_NUM_DNS_QUERIES=3,
+            SPF_ALL="-all",
+            SPF_DNS_QUERY_COUNT=3,
             SPF_TOO_MANY_DNS_QUERIES=False,
             DMARC="v=DMARC1; p=reject; rua=mailto:dmarc@test.com; pct=100; sp=reject",
             DMARC_POLICY="reject",
@@ -119,8 +119,8 @@ class TestSecurityScore(unittest.TestCase):
         """A domain with only SPF (hard fail) should get partial credit."""
         result = self._make_result(
             SPF="v=spf1 include:_spf.google.com -all",
-            SPF_MULTIPLE_ALLS="-all",
-            SPF_NUM_DNS_QUERIES=2,
+            SPF_ALL="-all",
+            SPF_DNS_QUERY_COUNT=2,
             SPF_TOO_MANY_DNS_QUERIES=False,
         )
         score = SecurityScore(result)
@@ -133,11 +133,11 @@ class TestSecurityScore(unittest.TestCase):
         """~all should score less than -all."""
         result_hard = self._make_result(
             SPF="v=spf1 -all",
-            SPF_MULTIPLE_ALLS="-all",
+            SPF_ALL="-all",
         )
         result_soft = self._make_result(
             SPF="v=spf1 ~all",
-            SPF_MULTIPLE_ALLS="~all",
+            SPF_ALL="~all",
         )
         score_hard = SecurityScore(result_hard)
         score_soft = SecurityScore(result_soft)
@@ -185,14 +185,14 @@ class TestSecurityScore(unittest.TestCase):
         """SPF with >10 DNS lookups causes RFC 7208 PermError — hard-cap at 5."""
         result_ok = self._make_result(
             SPF="v=spf1 -all",
-            SPF_MULTIPLE_ALLS="-all",
-            SPF_NUM_DNS_QUERIES=5,
+            SPF_ALL="-all",
+            SPF_DNS_QUERY_COUNT=5,
             SPF_TOO_MANY_DNS_QUERIES=False,
         )
         result_bad = self._make_result(
             SPF="v=spf1 -all",
-            SPF_MULTIPLE_ALLS="-all",
-            SPF_NUM_DNS_QUERIES=15,
+            SPF_ALL="-all",
+            SPF_DNS_QUERY_COUNT=15,
             SPF_TOO_MANY_DNS_QUERIES=True,
         )
         score_ok = SecurityScore(result_ok)
@@ -205,7 +205,7 @@ class TestSecurityScore(unittest.TestCase):
         """SPF with multiple records causes PermError — hard-cap at 0."""
         result = self._make_result(
             SPF="v=spf1 -all",
-            SPF_MULTIPLE_ALLS="-all",
+            SPF_ALL="-all",
             SPF_PERMERROR=True,
         )
         score = SecurityScore(result)
@@ -226,7 +226,7 @@ class TestSecurityScore(unittest.TestCase):
         """A normal single SPF record should not trigger PermError."""
         result = self._make_result(
             SPF="v=spf1 -all",
-            SPF_MULTIPLE_ALLS="-all",
+            SPF_ALL="-all",
             SPF_PERMERROR=False,
         )
         score = SecurityScore(result)
@@ -345,7 +345,7 @@ class TestSecurityScoreStr(unittest.TestCase):
         result = {
             "DOMAIN": "test.com",
             "SPF": None,
-            "SPF_MULTIPLE_ALLS": None,
+            "SPF_ALL": None,
             "SPF_TOO_MANY_DNS_QUERIES": False,
             "DMARC": None,
             "DMARC_POLICY": None,

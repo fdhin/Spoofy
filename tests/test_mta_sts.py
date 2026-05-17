@@ -144,7 +144,7 @@ class TestMTASTS(unittest.TestCase):
         from modules.scoring import SecurityScore
         result = {
             "SPF": "v=spf1 -all",
-            "SPF_MULTIPLE_ALLS": "-all",
+            "SPF_ALL": "-all",
             "DMARC": "v=DMARC1; p=reject; rua=mailto:d@e.com",
             "DMARC_POLICY": "reject",
             "DMARC_AGGREGATE_REPORT": "mailto:d@e.com",
@@ -240,7 +240,7 @@ class TestMTASTS(unittest.TestCase):
         from modules.remediation import RemediationEngine
         result = {
             "DOMAIN": "test.com",
-            "SPF": "v=spf1 -all", "SPF_MULTIPLE_ALLS": "-all",
+            "SPF": "v=spf1 -all", "SPF_ALL": "-all",
             "DMARC": "v=DMARC1; p=reject", "DMARC_POLICY": "reject",
             "DMARC_AGGREGATE_REPORT": "mailto:d@t.com",
             "DKIM": "selector1", "BIMI_RECORD": None,
@@ -258,7 +258,7 @@ class TestMTASTS(unittest.TestCase):
         from modules.remediation import RemediationEngine
         result = {
             "DOMAIN": "test.com",
-            "SPF": "v=spf1 -all", "SPF_MULTIPLE_ALLS": "-all",
+            "SPF": "v=spf1 -all", "SPF_ALL": "-all",
             "DMARC": "v=DMARC1; p=reject", "DMARC_POLICY": "reject",
             "DMARC_AGGREGATE_REPORT": "mailto:d@t.com",
             "DKIM": "selector1", "BIMI_RECORD": None,
@@ -277,7 +277,7 @@ class TestMTASTS(unittest.TestCase):
         from modules.remediation import RemediationEngine
         result = {
             "DOMAIN": "test.com",
-            "SPF": "v=spf1 -all", "SPF_MULTIPLE_ALLS": "-all",
+            "SPF": "v=spf1 -all", "SPF_ALL": "-all",
             "DMARC": "v=DMARC1; p=reject", "DMARC_POLICY": "reject",
             "DMARC_AGGREGATE_REPORT": "mailto:d@t.com",
             "DKIM": "selector1", "BIMI_RECORD": None,
@@ -296,7 +296,7 @@ class TestMTASTS(unittest.TestCase):
         from modules.remediation import RemediationEngine
         result = {
             "DOMAIN": "test.com",
-            "SPF": "v=spf1 -all", "SPF_MULTIPLE_ALLS": "-all",
+            "SPF": "v=spf1 -all", "SPF_ALL": "-all",
             "DMARC": "v=DMARC1; p=reject", "DMARC_POLICY": "reject",
             "DMARC_AGGREGATE_REPORT": "mailto:d@t.com",
             "DKIM": "selector1", "BIMI_RECORD": None,
@@ -315,7 +315,7 @@ class TestMTASTS(unittest.TestCase):
         from modules.remediation import RemediationEngine
         result = {
             "DOMAIN": "test.com",
-            "SPF": "v=spf1 -all", "SPF_MULTIPLE_ALLS": "-all",
+            "SPF": "v=spf1 -all", "SPF_ALL": "-all",
             "DMARC": "v=DMARC1; p=reject", "DMARC_POLICY": "reject",
             "DMARC_AGGREGATE_REPORT": "mailto:d@t.com",
             "DKIM": "selector1", "BIMI_RECORD": None,

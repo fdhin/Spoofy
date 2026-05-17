@@ -1273,8 +1273,8 @@
         function renderSPFDetails(r) {
             return detailRows([
                 ['<span class="tooltip" data-tip="Sender Policy Framework: A list of authorized IP addresses allowed to send on your behalf.">SPF Record</span>', r.SPF, true],
-                ['<span class="tooltip" data-tip="The mechanism that tells receivers what to do when an email fails SPF formatting (-all is strict, ~all is soft).">All Mechanism</span>', r.SPF_MULTIPLE_ALLS],
-                ['<span class="tooltip" data-tip="SPF is limited to 10 DNS lookups to prevent denial-of-service.">DNS Lookups</span>', r.SPF_NUM_DNS_QUERIES],
+                ['<span class="tooltip" data-tip="The mechanism that tells receivers what to do when an email fails SPF formatting (-all is strict, ~all is soft).">All Mechanism</span>', r.SPF_ALL],
+                ['<span class="tooltip" data-tip="SPF is limited to 10 DNS lookups to prevent denial-of-service.">DNS Lookups</span>', r.SPF_DNS_QUERY_COUNT],
                 ['Too Many Lookups', r.SPF_TOO_MANY_DNS_QUERIES ? '⚠️ Yes' : '✅ No'],
             ]);
         }

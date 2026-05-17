@@ -14,8 +14,8 @@ class TestRemediationEngine(unittest.TestCase):
             "DOMAIN_TYPE": "domain",
             "DNS_SERVER": "1.1.1.1",
             "SPF": None,
-            "SPF_MULTIPLE_ALLS": None,
-            "SPF_NUM_DNS_QUERIES": 0,
+            "SPF_ALL": None,
+            "SPF_DNS_QUERY_COUNT": 0,
             "SPF_TOO_MANY_DNS_QUERIES": False,
             "DMARC": None,
             "DMARC_EFFECTIVE_POLICY": None,
@@ -69,7 +69,7 @@ class TestRemediationEngine(unittest.TestCase):
         """SPF with +all should generate a critical recommendation."""
         result = self._make_result(
             SPF="v=spf1 +all",
-            SPF_MULTIPLE_ALLS="+all",
+            SPF_ALL="+all",
         )
         engine = RemediationEngine(result)
         spf_recs = [r for r in engine.recommendations if r.category == "SPF"]
@@ -81,7 +81,7 @@ class TestRemediationEngine(unittest.TestCase):
         """SPF with ?all should generate a high priority recommendation."""
         result = self._make_result(
             SPF="v=spf1 ?all",
-            SPF_MULTIPLE_ALLS="?all",
+            SPF_ALL="?all",
         )
         engine = RemediationEngine(result)
         spf_recs = [r for r in engine.recommendations if r.category == "SPF"]
@@ -93,7 +93,7 @@ class TestRemediationEngine(unittest.TestCase):
         """SPF with ~all should generate a low priority recommendation."""
         result = self._make_result(
             SPF="v=spf1 ~all",
-            SPF_MULTIPLE_ALLS="~all",
+            SPF_ALL="~all",
         )
         engine = RemediationEngine(result)
         spf_recs = [r for r in engine.recommendations if r.category == "SPF"]
@@ -105,8 +105,8 @@ class TestRemediationEngine(unittest.TestCase):
         """SPF with >10 DNS lookups should generate a recommendation."""
         result = self._make_result(
             SPF="v=spf1 -all",
-            SPF_MULTIPLE_ALLS="-all",
-            SPF_NUM_DNS_QUERIES=15,
+            SPF_ALL="-all",
+            SPF_DNS_QUERY_COUNT=15,
             SPF_TOO_MANY_DNS_QUERIES=True,
         )
         engine = RemediationEngine(result)
@@ -117,7 +117,7 @@ class TestRemediationEngine(unittest.TestCase):
         """SPF with multiple 'all' mechanisms should generate a recommendation."""
         result = self._make_result(
             SPF="v=spf1 -all ~all",
-            SPF_MULTIPLE_ALLS="2many",
+            SPF_ALL="2many",
         )
         engine = RemediationEngine(result)
         multi_recs = [r for r in engine.recommendations if "multiple" in r.title.lower()]
@@ -178,8 +178,8 @@ class TestRemediationEngine(unittest.TestCase):
         """A perfectly configured domain should have minimal recommendations."""
         result = self._make_result(
             SPF="v=spf1 include:_spf.google.com -all",
-            SPF_MULTIPLE_ALLS="-all",
-            SPF_NUM_DNS_QUERIES=3,
+            SPF_ALL="-all",
+            SPF_DNS_QUERY_COUNT=3,
             SPF_TOO_MANY_DNS_QUERIES=False,
             DMARC="v=DMARC1; p=reject; rua=mailto:dmarc@test.com; sp=reject",
             DMARC_EFFECTIVE_POLICY="reject",
@@ -230,7 +230,7 @@ class TestRemediationEngine(unittest.TestCase):
         """__str__ for perfect config should show no items."""
         result = self._make_result(
             SPF="v=spf1 -all",
-            SPF_MULTIPLE_ALLS="-all",
+            SPF_ALL="-all",
             DMARC="v=DMARC1; p=reject; rua=mailto:d@t.com; sp=reject",
             DMARC_EFFECTIVE_POLICY="reject",
             DMARC_AGGREGATE_REPORT="mailto:d@t.com",

@@ -1,0 +1,8 @@
+# Add domains here, one per line.
+# These should be stable, real-world domains that cover edge cases.
+# See README.md for guidance on domain selection.
+#
+# Example:
+# google.com
+# cloudflare.com
+# example.com

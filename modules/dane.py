@@ -1,5 +1,7 @@
 # modules/dane.py
 
+from .dns_utils import encode_idna as _encode_idna
+
 """
 DANE (DNS-based Authentication of Named Entities) detection module.
 
@@ -70,17 +72,6 @@ def _is_ip_address(host):
         return False
 
 
-def _encode_idna(domain):
-    """Encode a domain to IDNA A-label form per RFC 5890."""
-    try:
-        return domain.encode("idna").decode("ascii")
-    except (UnicodeError, UnicodeDecodeError):
-        try:
-            domain.encode("ascii")
-            return domain
-        except UnicodeEncodeError:
-            logger.warning("Cannot IDNA-encode MX domain: %s", domain)
-            return domain
 
 
 class DANE:

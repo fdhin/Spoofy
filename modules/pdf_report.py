@@ -1,5 +1,7 @@
 # modules/pdf_report.py
 
+from .schema import CATEGORY_DISPLAY_NAMES
+
 """
 PDF Executive Report generator for SpoofyVibe.
 
@@ -37,6 +39,20 @@ def _safe(text):
         "\u2026": "...", # ellipsis
         "\u00a0": " ",   # non-breaking space
         "\u2192": "->",  # right arrow
+        "\u2705": "[OK]",    # white heavy check mark
+        "\u2714": "[OK]",    # heavy check mark
+        "\u274c": "[FAIL]",  # cross mark
+        "\u26a0\ufe0f": "[WARN]",  # warning sign + VS16
+        "\u26a0": "[WARN]",  # warning sign
+        "\u2139\ufe0f": "[INFO]",  # information source + VS16
+        "\u2139": "[INFO]",  # information source
+        "\u2757\ufe0f": "[ALERT]", # exclamation mark + VS16
+        "\u2757": "[ALERT]", # exclamation mark
+        "\u2b50": "[STAR]",  # star
+        "\u2728": "[+]",     # sparkles
+        "\ud83d\udd12": "[LOCK]",  # lock
+        "\ud83d\udee1\ufe0f": "[SHIELD]", # shield + VS16
+        "\ud83d\udee1": "[SHIELD]", # shield
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
@@ -73,6 +89,8 @@ PRIORITY_COLORS = {
 
 PRIORITY_LABELS = {1: "CRITICAL", 2: "HIGH", 3: "MEDIUM", 4: "LOW", 5: "INFO"}
 
+# CATEGORY_LABELS used as a fallback when SCORE_BREAKDOWN is not available.
+# The primary rendering path iterates SCORE_BREAKDOWN dynamically.
 CATEGORY_LABELS = [
     ("spf", "SPF", 16),
     ("dmarc", "DMARC", 22),
@@ -83,6 +101,7 @@ CATEGORY_LABELS = [
     ("mx", "MX", 7),
     ("caa", "CAA", 5),
     ("dnssec", "DNSSEC", 5),
+    ("dane", "DANE", 5),
 ]
 
 
@@ -298,10 +317,12 @@ def generate_pdf_report(results, filename="spoofyvibe_report.pdf"):
     pdf._section_title("Executive Summary")
 
     # Key stats
-    scores = [r.get("SECURITY_SCORE", 0) for r in results]
+    scores = [r.get("SECURITY_SCORE_PCT", 0) for r in results]
     postures = [r.get("SECURITY_POSTURE", "?") for r in results]
     avg_score = sum(scores) / len(scores) if scores else 0
-    spoofable_count = sum(1 for r in results if r.get("SPOOFING_POSSIBLE"))
+    spoofable_count = sum(1 for r in results if r.get("SPOOFING_POSSIBLE") is True)
+    maybe_count = sum(1 for r in results if r.get("SPOOFING_POSSIBLE") is None)
+    safe_count = sum(1 for r in results if r.get("SPOOFING_POSSIBLE") is False)
     critical_count = sum(
         1 for r in results
         for rec in r.get("RECOMMENDATIONS", [])
@@ -312,33 +333,40 @@ def generate_pdf_report(results, filename="spoofyvibe_report.pdf"):
     stat_items = [
         ("Average Score", f"{avg_score:.0f} / 100"),
         ("Domains Scanned", str(domain_count)),
-        ("Spoofable Domains", str(spoofable_count)),
+        ("Spoofable", str(spoofable_count)),
+        ("Partially Spoofable", str(maybe_count)),
+        ("Protected", str(safe_count)),
         ("Critical Issues", str(critical_count)),
     ]
 
-    card_w = 42
+    num_cards = len(stat_items)
+    card_w = (180 - (num_cards - 1) * 2) / num_cards  # fit within 180mm with 2mm gaps
     start_x = 15
     y = pdf.get_y() + 2
 
     for i, (label, value) in enumerate(stat_items):
-        x = start_x + i * (card_w + 2.5)
+        x = start_x + i * (card_w + 2)
         pdf.set_fill_color(*CARD_BG)
         pdf.rect(x, y, card_w, 22, "F")
         # Value
-        pdf.set_font("Helvetica", "B", 16)
-        if "Spoofable" in label and spoofable_count > 0:
-            pdf.set_text_color(239, 68, 68)
-        elif "Critical" in label and critical_count > 0:
-            pdf.set_text_color(249, 115, 22)
+        pdf.set_font("Helvetica", "B", 14)
+        if label == "Spoofable" and spoofable_count > 0:
+            pdf.set_text_color(239, 68, 68)        # red
+        elif label == "Partially Spoofable" and maybe_count > 0:
+            pdf.set_text_color(249, 115, 22)        # amber
+        elif label == "Protected" and safe_count > 0:
+            pdf.set_text_color(34, 197, 94)          # green
+        elif label == "Critical Issues" and critical_count > 0:
+            pdf.set_text_color(249, 115, 22)        # amber
         else:
             pdf.set_text_color(*ACCENT_CYAN)
-        pdf.set_xy(x + 2, y + 2)
-        pdf.cell(card_w - 4, 10, value, align="C")
+        pdf.set_xy(x + 1, y + 2)
+        pdf.cell(card_w - 2, 10, value, align="C")
         # Label
-        pdf.set_font("Helvetica", "", 7)
+        pdf.set_font("Helvetica", "", 6)
         pdf.set_text_color(*TEXT_SECONDARY)
-        pdf.set_xy(x + 2, y + 13)
-        pdf.cell(card_w - 4, 6, label, align="C")
+        pdf.set_xy(x + 1, y + 13)
+        pdf.cell(card_w - 2, 6, label, align="C")
 
     pdf.set_y(y + 28)
 
@@ -480,8 +508,9 @@ def generate_pdf_report(results, filename="spoofyvibe_report.pdf"):
 
         y = pdf.get_y()
 
-        # Card background
-        card_h = 8 + len(CATEGORY_LABELS) * 7 + 4
+        # Card background — use actual breakdown size for height
+        num_categories = len(breakdown) if breakdown else len(CATEGORY_LABELS)
+        card_h = 8 + num_categories * 7 + 4
         pdf.set_fill_color(*CARD_BG)
         pdf.rect(15, y, 180, card_h, "F")
 
@@ -506,18 +535,25 @@ def generate_pdf_report(results, filename="spoofyvibe_report.pdf"):
             spoof_txt = "  |  Not Spoofable"
         pdf.cell(80, 5, _safe(f"Score: {score}/{result.get('SECURITY_SCORE_MAX', 100)}{spoof_txt}"))
 
-        # Score bars
+        # Score bars — iterate SCORE_BREAKDOWN dynamically so new
+        # scoring categories are picked up without changing this renderer.
         bar_y = y + 16
-        for key, label, max_pts in CATEGORY_LABELS:
-            raw = breakdown.get(key, 0)
-            # Handle both dict ({score, max, percentage}) and int values
-            if isinstance(raw, dict):
-                cat_score = raw.get("score", 0)
-                max_pts = raw.get("max", max_pts)
-            else:
-                cat_score = raw if isinstance(raw, (int, float)) else 0
-            pdf._score_bar(20, bar_y, 170, cat_score, max_pts, label)
-            bar_y += 7
+        if breakdown:
+            for key, cat_data in breakdown.items():
+                label = CATEGORY_DISPLAY_NAMES.get(key, key.replace('_', ' ').title())
+                if isinstance(cat_data, dict):
+                    cat_score = cat_data.get("score", 0)
+                    max_pts = cat_data.get("max", 1)
+                else:
+                    cat_score = cat_data if isinstance(cat_data, (int, float)) else 0
+                    max_pts = 1
+                pdf._score_bar(20, bar_y, 170, cat_score, max_pts, label)
+                bar_y += 7
+        else:
+            # Fallback to hardcoded labels if no breakdown available
+            for key, label, max_pts in CATEGORY_LABELS:
+                pdf._score_bar(20, bar_y, 170, 0, max_pts, label)
+                bar_y += 7
 
         pdf.set_y(y + card_h + 4)
 

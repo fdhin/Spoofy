@@ -5,6 +5,9 @@ import tldextract
 import logging
 import re
 
+from .txt_utils import parse_txt_record, parse_tag_value
+from .dns_utils import encode_idna
+
 logger = logging.getLogger("spoofyvibe.dmarc")
 
 
@@ -33,27 +36,44 @@ class DMARC:
     def _parse_tags(self):
         """Parse DMARC record into a dict of tag=value pairs per RFC 7489 §6.4.
 
-        Splits on semicolons, then partitions each token on the first '=' to
-        avoid substring collisions (e.g. 'sp=' matching inside 'aspf=').
+        Uses txt_utils.parse_tag_value() for the actual parsing, which:
+          - Splits on semicolons, then partitions on the first '=' to avoid
+            substring collisions (e.g. 'sp=' matching inside 'aspf=').
+          - Detects duplicate tag names and returns {} (per RFC 7489 §6.4:
+            "Tags with duplicate names MUST NOT occur within a single tag-list;
+            if a tag name does occur more than once, the entire tag-list is invalid.")
+
+        After parsing, validates DMARC-specific ordering constraints:
+          - RFC 7489 §6.3: 'v' must be the first tag, 'p' must be the second.
         """
-        tags = {}
         if not self.dmarc_record:
-            return tags
-            
+            return {}
+
+        tags = parse_tag_value(self.dmarc_record)
+
+        # parse_tag_value returns {} for duplicate tags — this means the
+        # entire DMARC record is invalid per RFC 7489 §6.4.
+        if not tags and self.dmarc_record:
+            logger.error(
+                "DMARC record for %s has duplicate tags — entire record "
+                "is invalid per RFC 7489 §6.4", self.domain
+            )
+            self._is_ordering_valid = False
+            return {}
+
+        # Enforce strict tag ordering (RFC 7489 §6.3: v first, p second)
+        # We need to check the raw record since parse_tag_value returns a dict
+        # which loses ordering information.
+        is_ordering_valid = True
         parts = [p.strip() for p in self.dmarc_record.split(";") if p.strip()]
-        
         extracted_keys = []
         for part in parts:
             if "=" in part:
-                key, _, value = part.partition("=")
-                key = key.strip().lower()
-                tags[key] = value.strip()
-                extracted_keys.append(key)
+                key, _, _ = part.partition("=")
+                extracted_keys.append(key.strip().lower())
             else:
                 extracted_keys.append("malformed")
-                
-        # Enforce strict tag ordering (RFC 7489 §6.3: v first, p second if present)
-        is_ordering_valid = True
+
         if extracted_keys:
             if extracted_keys[0] != "v":
                 is_ordering_valid = False
@@ -166,11 +186,7 @@ class DMARC:
                 resolver.nameservers = [self.dns_server]
                 
             # IDNA encode domain per RFC 7489 §6.6.1
-            try:
-                idna_domain = domain.encode("idna").decode("ascii")
-            except Exception as e:
-                logger.error("Failed to IDNA encode %s: %s", domain, e)
-                idna_domain = domain
+            idna_domain = encode_idna(domain)
                 
             logger.debug("Querying _dmarc.%s TXT", idna_domain)
             dmarc = resolver.resolve(f"_dmarc.{idna_domain}", "TXT")
@@ -193,9 +209,9 @@ class DMARC:
         # Multiple records check per RFC 7489 §6.6.3 step 5
         valid_records = []
         for dns_data in dmarc:
-            # Join raw byte strings without separator to avoid space injection
-            # at the 255-byte TXT boundary (fixes multi-string TXT mangling).
-            record = b"".join(dns_data.strings).decode("utf-8", errors="replace").strip()
+            # Use txt_utils.parse_txt_record() to safely join multi-string
+            # TXT records without space injection at the 255-byte boundary.
+            record = parse_txt_record(dns_data).strip()
             # RFC 7489 §6.4: v *WSP = *WSP DMARC1 precisely
             if re.match(r"^[vV][ \t]*=[ \t]*DMARC1([ \t]*;|$)", record):
                 valid_records.append(record)
@@ -221,7 +237,7 @@ class DMARC:
             resolver.nameservers = [self.dns_server]
 
         try:
-            subdomain_encoded = subdomain.encode("idna").decode("ascii")
+            subdomain_encoded = encode_idna(subdomain)
         except Exception:
             subdomain_encoded = subdomain
             
@@ -246,3 +262,4 @@ class DMARC:
             f"Org Domain Fallback: {self.is_org_domain_fallback}\n"
             f"Has Wildcard DNS: {self.has_wildcard_dns}"
         )
+

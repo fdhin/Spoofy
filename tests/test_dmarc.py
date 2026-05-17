@@ -239,5 +239,131 @@ class TestDmarcHardening(unittest.TestCase):
         self.assertEqual(d.policy, "reject")
 
 
+class TestDmarcDuplicateTags(unittest.TestCase):
+    """Tests for RFC 7489 §6.4: duplicate tag names invalidate the record.
+
+    This was the core bug: a DMARC record with 'p=none; p=reject' was
+    silently accepted as p=reject (last-wins), causing false 'protected'
+    verdicts in the spoofing engine. With the txt_utils.parse_tag_value()
+    integration, duplicate tags now invalidate the entire record.
+    """
+
+    def _make_dmarc_with_record(self, record):
+        with patch.object(DMARC, "get_dmarc_record", return_value=record), \
+             patch.object(DMARC, "check_wildcard_dns", return_value=False):
+            return DMARC("example.com")
+
+    def test_duplicate_p_tag_invalidates(self):
+        """Duplicate p= tags must invalidate the entire record."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=none; p=reject;")
+        self.assertEqual(d.tags, {})
+        self.assertIsNone(d.dmarc_record)
+
+    def test_duplicate_rua_invalidates(self):
+        """Duplicate rua= tags must invalidate the entire record."""
+        d = self._make_dmarc_with_record(
+            "v=DMARC1; p=reject; rua=mailto:a@b.c; rua=mailto:x@y.z;"
+        )
+        self.assertEqual(d.tags, {})
+        self.assertIsNone(d.dmarc_record)
+
+    def test_duplicate_v_tag_invalidates(self):
+        """Duplicate v= tags must invalidate the entire record."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=reject; v=DMARC1;")
+        self.assertEqual(d.tags, {})
+        self.assertIsNone(d.dmarc_record)
+
+    def test_no_duplicates_is_valid(self):
+        """Normal record with no duplicates must parse correctly."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=reject; rua=mailto:a@b.c;")
+        self.assertEqual(d.policy, "reject")
+        self.assertEqual(d.rua, "mailto:a@b.c")
+        self.assertIsNotNone(d.dmarc_record)
+
+
+class TestDmarcMultiStringTXT(unittest.TestCase):
+    """Tests for multi-string TXT record handling via txt_utils.
+
+    DMARC records exceeding 255 bytes are split into multiple TXT strings
+    by DNS. The parse_txt_record() function must join them without
+    injecting spaces at the boundary.
+    """
+
+    @patch("dns.resolver.Resolver")
+    def test_multi_string_joined_correctly(self, mock_resolver_cls):
+        """Multi-string TXT records must be joined without space injection."""
+        mock_resolver = MagicMock()
+        mock_resolver_cls.return_value = mock_resolver
+
+        # Simulate a DMARC record split across two TXT strings
+        rdata = MagicMock()
+        rdata.strings = [
+            b"v=DMARC1; p=reject; rua=mailto:agg@example.com; ruf=mailt",
+            b"o:for@example.com; aspf=s; adkim=r; pct=100; fo=1",
+        ]
+        mock_resolver.resolve.return_value = [rdata]
+
+        with patch.object(DMARC, "check_wildcard_dns", return_value=False):
+            d = DMARC("example.com")
+
+        self.assertEqual(d.policy, "reject")
+        self.assertEqual(d.ruf, "mailto:for@example.com")
+        self.assertEqual(d.aspf, "s")
+        self.assertEqual(d.pct, 100)
+        self.assertEqual(d.fo, "1")
+
+    @patch("dns.resolver.Resolver")
+    def test_multi_string_no_space_in_rua(self, mock_resolver_cls):
+        """Boundary split inside a mailto: URI must not inject a space."""
+        mock_resolver = MagicMock()
+        mock_resolver_cls.return_value = mock_resolver
+
+        # Split right in the middle of the rua mailto: URI
+        rdata = MagicMock()
+        rdata.strings = [
+            b"v=DMARC1; p=reject; rua=mailto:very-long-address@exa",
+            b"mple.com",
+        ]
+        mock_resolver.resolve.return_value = [rdata]
+
+        with patch.object(DMARC, "check_wildcard_dns", return_value=False):
+            d = DMARC("example.com")
+
+        self.assertEqual(d.rua, "mailto:very-long-address@example.com")
+
+
+class TestDmarcSubstringCollision(unittest.TestCase):
+    """Tests verifying tag names don't collide with substrings.
+
+    The old split("p=") approach would match "p=" inside "aspf=" or "sp=".
+    With parse_tag_value() using partition("=") per-token, each tag is
+    parsed independently.
+    """
+
+    def _make_dmarc_with_record(self, record):
+        with patch.object(DMARC, "get_dmarc_record", return_value=record), \
+             patch.object(DMARC, "check_wildcard_dns", return_value=False):
+            return DMARC("example.com")
+
+    def test_aspf_does_not_affect_p(self):
+        """aspf=r must not interfere with p=reject parsing."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=reject; aspf=r;")
+        self.assertEqual(d.policy, "reject")
+        self.assertEqual(d.aspf, "r")
+
+    def test_sp_does_not_affect_p(self):
+        """sp=none must not interfere with p=reject parsing."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=reject; sp=none;")
+        self.assertEqual(d.policy, "reject")
+        self.assertEqual(d.sp, "none")
+
+    def test_adkim_does_not_affect_other_tags(self):
+        """adkim=s must not collide with any other tag."""
+        d = self._make_dmarc_with_record("v=DMARC1; p=reject; adkim=s; aspf=s;")
+        self.assertEqual(d.adkim, "s")
+        self.assertEqual(d.aspf, "s")
+        self.assertEqual(d.policy, "reject")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -82,7 +82,7 @@ def write_to_markdown(data, file_name="output.md"):
         # Records table
         lines.append("| Check | Value |")
         lines.append("|-------|-------|")
-        for key in ["SPF", "SPF_MULTIPLE_ALLS", "SPF_NUM_DNS_QUERIES",
+        for key in ["SPF", "SPF_ALL", "SPF_DNS_QUERY_COUNT",
                      "DMARC", "DMARC_POLICY", "DMARC_PCT", "DMARC_ASPF",
                      "DMARC_SP", "DMARC_AGGREGATE_REPORT", "DMARC_FORENSIC_REPORT",
                      "DKIM", "BIMI_RECORD",
@@ -129,13 +129,40 @@ def output_json(results):
 
 
 def _flatten_results(data):
-    """Flatten results for tabular output (remove nested dicts/lists)."""
+    """Flatten results for tabular output (remove nested dicts/lists).
+
+    Special handling:
+      - SCORE_BREAKDOWN → expanded to Score_SPF, Score_DMARC, etc. columns
+      - RECOMMENDATIONS → collapsed to a single newline-delimited summary
+      - SCORE_DETAILS → skipped (too verbose for tabular format)
+    """
     flat = []
     for result in data:
         row = {}
         for k, v in result.items():
-            if k in ("SCORE_BREAKDOWN", "SCORE_DETAILS", "RECOMMENDATIONS"):
-                continue  # Skip complex nested fields
+            if k == "SCORE_BREAKDOWN":
+                # Expand each scoring category into its own column
+                if isinstance(v, dict):
+                    for cat_key, cat_data in v.items():
+                        label = cat_key.replace("_", " ").title()
+                        if isinstance(cat_data, dict):
+                            row[f"Score_{label}"] = cat_data.get("score", 0)
+                            row[f"Score_{label}_Max"] = cat_data.get("max", 0)
+                        else:
+                            row[f"Score_{label}"] = cat_data
+            elif k == "SCORE_DETAILS":
+                continue  # Too verbose for tabular format
+            elif k == "RECOMMENDATIONS":
+                # Collapse to priority + title summary
+                if isinstance(v, list) and v:
+                    summaries = []
+                    for rec in v:
+                        pri = rec.get("priority", 5)
+                        title = rec.get("title", "")
+                        summaries.append(f"P{pri}: {title}")
+                    row["RECOMMENDATIONS"] = "; ".join(summaries)
+                else:
+                    row["RECOMMENDATIONS"] = ""
             elif isinstance(v, (dict, list)):
                 row[k] = str(v)
             else:
@@ -150,8 +177,8 @@ def printer(**kwargs):
     subdomain = kwargs.get("DOMAIN_TYPE") == "subdomain"
     dns_server = kwargs.get("DNS_SERVER")
     spf_record = kwargs.get("SPF")
-    spf_all = kwargs.get("SPF_MULTIPLE_ALLS")
-    spf_dns_query_count = kwargs.get("SPF_NUM_DNS_QUERIES")
+    spf_all = kwargs.get("SPF_ALL")
+    spf_dns_query_count = kwargs.get("SPF_DNS_QUERY_COUNT")
     dmarc_record = kwargs.get("DMARC")
     p = kwargs.get("DMARC_POLICY")
     pct = kwargs.get("DMARC_PCT")

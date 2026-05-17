@@ -1,5 +1,7 @@
 # modules/mta_sts.py
 
+from .dns_utils import encode_idna as _encode_idna
+
 """
 MTA-STS (SMTP MTA Strict Transport Security) and TLS-RPT detection.
 
@@ -47,17 +49,6 @@ _TLS_RPT_TXT_RE = re.compile(r'^v=TLSRPTv1(?:[ \t;]|$)', re.ASCII)
 _STS_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,32}$')
 
 
-def _encode_idna(domain):
-    """Encode a domain to IDNA A-label form (Punycode) per RFC 5890."""
-    try:
-        return domain.encode("idna").decode("ascii")
-    except (UnicodeError, UnicodeDecodeError):
-        try:
-            domain.encode("ascii")
-            return domain
-        except UnicodeEncodeError:
-            logger.warning("Cannot IDNA-encode domain: %s", domain)
-            return None
 
 
 def _mx_matches_pattern(host, pattern):

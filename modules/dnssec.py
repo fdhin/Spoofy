@@ -1,5 +1,7 @@
 # modules/dnssec.py
 
+from .dns_utils import encode_idna as _encode_idna
+
 """
 DNSSEC detection and cryptographic posture module.
 
@@ -39,17 +41,6 @@ _WEAK_DNSKEY_ALGS = frozenset({1, 3, 5, 6, 7, 12})
 _WEAK_DS_DIGESTS = frozenset({1, 3})
 
 
-def _encode_idna(domain):
-    """Encode a domain to IDNA A-label form per RFC 5890."""
-    try:
-        return domain.encode("idna").decode("ascii")
-    except (UnicodeError, UnicodeDecodeError):
-        try:
-            domain.encode("ascii")
-            return domain
-        except UnicodeEncodeError:
-            logger.warning("Cannot IDNA-encode domain: %s", domain)
-            return domain
 
 
 class DNSSEC:

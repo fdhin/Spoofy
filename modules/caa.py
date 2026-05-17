@@ -34,33 +34,9 @@ import logging
 
 logger = logging.getLogger("spoofyvibe.caa")
 
+from .dns_utils import encode_idna as _encode_idna
 
-def _encode_idna(domain):
-    """Encode a domain to IDNA A-label form (Punycode) per RFC 8659 §4.2.
 
-    Python's str.encode('idna') operates on single labels, not dotted
-    domain names.  We split, encode each label, and rejoin.
-    """
-    try:
-        labels = domain.split(".")
-        encoded = []
-        for label in labels:
-            try:
-                encoded.append(label.encode("idna").decode("ascii"))
-            except (UnicodeError, UnicodeDecodeError):
-                # Label cannot be IDNA-encoded; keep original.
-                # This is logged at WARNING because _build_walk may fail
-                # on this label downstream.
-                logger.warning(
-                    "IDNA encoding failed for label '%s' in domain '%s'; "
-                    "keeping original (may cause tree-walk issues)",
-                    label, domain,
-                )
-                encoded.append(label)
-        return ".".join(encoded)
-    except Exception:
-        logger.warning("Cannot IDNA-encode domain: %s", domain)
-        return domain
 
 
 class CAA:

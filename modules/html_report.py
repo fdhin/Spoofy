@@ -1,5 +1,7 @@
 # modules/html_report.py
 
+from .schema import CATEGORY_DISPLAY_NAMES
+
 """
 Self-contained HTML report generator for SpoofyVibe.
 
@@ -132,28 +134,21 @@ def _build_domain_card(result):
     else:
         spoof_badge = '<span class="badge badge-danger">SPOOFABLE</span>'
 
-    # Score category bars
+    # Score category bars — iterate SCORE_BREAKDOWN dynamically so new
+    # scoring categories are picked up without changing this renderer.
     score_bars = ""
-    category_labels = {
-        "spf": "SPF",
-        "dmarc": "DMARC",
-        "dkim": "DKIM",
-        "bimi": "BIMI",
-        "spoofability": "Spoof Resistance",
-        "mta_sts": "MTA-STS & TLS-RPT",
-        "mx": "MX Infrastructure",
-        "caa": "CAA",
-        "dnssec": "DNSSEC",
-    }
-    for cat_key, cat_label in category_labels.items():
-        cat = breakdown.get(cat_key, {})
+    for cat_key, cat_data in breakdown.items():
+        cat_label = CATEGORY_DISPLAY_NAMES.get(cat_key, cat_key.replace('_', ' ').title())
         score_bars += _build_score_bar(
-            cat.get("score", 0), cat.get("max", 1), cat_label
+            cat_data.get("score", 0) if isinstance(cat_data, dict) else 0,
+            cat_data.get("max", 1) if isinstance(cat_data, dict) else 1,
+            cat_label
         )
 
-    # Detail sections
+    # Detail sections — also iterate dynamically
     detail_sections = ""
-    for cat_key, cat_label in category_labels.items():
+    for cat_key in breakdown:
+        cat_label = CATEGORY_DISPLAY_NAMES.get(cat_key, cat_key.replace('_', ' ').title())
         cat_details = details.get(cat_key, [])
         if cat_details:
             detail_sections += f"""
@@ -178,11 +173,11 @@ def _build_domain_card(result):
       </div>
       <div class="record-item">
         <div class="record-label">SPF All Mechanism</div>
-        <div class="record-value"><code>{_esc(result.get('SPF_MULTIPLE_ALLS'))}</code></div>
+        <div class="record-value"><code>{_esc(result.get('SPF_ALL'))}</code></div>
       </div>
       <div class="record-item">
         <div class="record-label">SPF DNS Queries</div>
-        <div class="record-value">{_esc(result.get('SPF_NUM_DNS_QUERIES'))} {'⚠️ Over limit!' if result.get('SPF_TOO_MANY_DNS_QUERIES') else ''}</div>
+        <div class="record-value">{_esc(result.get('SPF_DNS_QUERY_COUNT'))} {'⚠️ Over limit!' if result.get('SPF_TOO_MANY_DNS_QUERIES') else ''}</div>
       </div>
       <div class="record-item">
         <div class="record-label">DMARC Record</div>
@@ -316,7 +311,7 @@ def generate_html_report(results, filename="output.html"):
 
     # Compute executive summary stats
     total = len(results)
-    scores = [r.get("SECURITY_SCORE", 0) for r in results]
+    scores = [r.get("SECURITY_SCORE_PCT", 0) for r in results]
     avg_score = round(sum(scores) / total, 1) if total > 0 else 0
     spoofable_count = sum(
         1 for r in results if r.get("SPOOFING_POSSIBLE") is True

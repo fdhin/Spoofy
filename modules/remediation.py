@@ -110,9 +110,9 @@ class RemediationEngine:
     def _check_spf(self):
         recs = []
         spf = self.result.get("SPF")
-        spf_all = self.result.get("SPF_MULTIPLE_ALLS")
+        spf_all = self.result.get("SPF_ALL")
         too_many = self.result.get("SPF_TOO_MANY_DNS_QUERIES", False)
-        query_count = self.result.get("SPF_NUM_DNS_QUERIES", 0)
+        query_count = self.result.get("SPF_DNS_QUERY_COUNT", 0)
 
         if not spf:
             recs.append(
@@ -228,19 +228,38 @@ class RemediationEngine:
             )
 
         elif spf_all == "~all":
+            dmarc_policy = self.result.get("DMARC_EFFECTIVE_POLICY")
+            if dmarc_policy in ("quarantine", "reject"):
+                # With DMARC enforcement, ~all vs -all has minimal practical impact
+                # because DMARC alignment already drives the enforcement decision.
+                description = (
+                    f"The SPF record for {self.domain} uses softfail (~all). At the SPF layer "
+                    "this doesn't instruct receivers to reject unauthorized senders. However, "
+                    f"your DMARC policy is '{dmarc_policy}', which already enforces action on "
+                    "alignment failures regardless of the SPF qualifier. The practical delta "
+                    "between ~all and -all is therefore minimal for your domain."
+                )
+                impact = (
+                    "With DMARC at '{0}', the difference between ~all and -all is primarily "
+                    "cosmetic in DMARC aggregate reports and minor receiver heuristics. "
+                    "Upgrading to -all is still best practice for clarity and defense in depth."
+                ).format(dmarc_policy)
+            else:
+                description = (
+                    f"The SPF record for {self.domain} uses softfail (~all). While this marks "
+                    "unauthorized senders, it doesn't instruct receivers to reject them."
+                )
+                impact = (
+                    "Most modern mail providers treat ~all similarly to -all, but the strongest "
+                    "protection comes from an explicit hard fail."
+                )
             recs.append(
                 Recommendation(
                     priority=4,
                     category="SPF",
                     title='SPF uses "~all" — consider upgrading to "-all"',
-                    description=(
-                        f"The SPF record for {self.domain} uses softfail (~all). While this marks "
-                        "unauthorized senders, it doesn't instruct receivers to reject them."
-                    ),
-                    impact=(
-                        "Most modern mail providers treat ~all similarly to -all, but the strongest "
-                        "protection comes from an explicit hard fail."
-                    ),
+                    description=description,
+                    impact=impact,
                     fix=(
                         "When you're confident your SPF includes are complete, change '~all' to '-all':\n\n"
                         f'{self.domain}.  IN  TXT  "{self._normalize_spf_all(spf, "~all", "-all")}"'
@@ -678,15 +697,24 @@ class RemediationEngine:
         if not bimi:
             # BIMI is optional, so this is low priority
             if dmarc_policy in ("quarantine", "reject"):
+                if dmarc_policy == "quarantine":
+                    dmarc_context = (
+                        f"The domain {self.domain} has DMARC at quarantine, which meets the minimum "
+                        "BIMI requirement, though Gmail prioritizes p=reject for logo display. "
+                        "BIMI allows your brand logo to appear next to your emails in supporting clients."
+                    )
+                else:
+                    dmarc_context = (
+                        f"The domain {self.domain} has DMARC at reject, which is the optimal "
+                        "DMARC policy for BIMI. "
+                        "BIMI allows your brand logo to appear next to your emails in supporting clients."
+                    )
                 recs.append(
                     Recommendation(
                         priority=5,
                         category="BIMI",
                         title="Consider adding a BIMI record for brand visibility",
-                        description=(
-                            f"The domain {self.domain} has strong DMARC enforcement but no BIMI record. "
-                            "BIMI allows your brand logo to appear next to your emails in supporting clients."
-                        ),
+                        description=dmarc_context,
                         impact=(
                             "BIMI increases brand recognition and builds trust with recipients. "
                             "It's also a signal that your email authentication is mature."
@@ -696,7 +724,9 @@ class RemediationEngine:
                             "Requirements:\n"
                             "  • Logo must be in SVG Tiny Portable/Secure format\n"
                             "  • DMARC policy must be quarantine or reject\n"
-                            "  • A Verified Mark Certificate (VMC) is recommended for Gmail"
+                            "  • A Verified Mark Certificate (VMC) is REQUIRED for Gmail to display your logo\n"
+                            "    (Apple Mail displays without VMC). VMCs are issued by DigiCert and Entrust,\n"
+                            "    typically costing €1,000-2,000/year, and require a registered trademark."
                         ),
                         reference="https://datatracker.ietf.org/doc/html/draft-brand-indicators-for-message-identification",
                     )
@@ -790,6 +820,25 @@ class RemediationEngine:
                 )
             )
         elif not mta_sts_txt:
+            # Build MX lines from detected MX records for copy-pasteable fix
+            mx_records = self.result.get("MX_RECORDS", [])
+            if mx_records:
+                mx_lines = []
+                for mx in mx_records:
+                    host = mx.get("host", "")
+                    if host and not mx.get("is_null_mx"):
+                        # Use wildcard prefix for managed providers (e.g. *.mail.protection.outlook.com)
+                        parts = host.split(".", 1)
+                        if len(parts) > 1:
+                            mx_lines.append(f"   mx: *.{parts[1]}")
+                        else:
+                            mx_lines.append(f"   mx: {host}")
+                if not mx_lines:
+                    mx_lines = ["   mx: *.your-mx-host.com"]
+                mx_block = "\n".join(mx_lines)
+            else:
+                mx_block = "   mx: *.your-mx-host.com"
+
             recs.append(
                 Recommendation(
                     priority=4,
@@ -797,21 +846,23 @@ class RemediationEngine:
                     title="No MTA-STS policy configured",
                     description=(
                         f"The domain {self.domain} has no MTA-STS (SMTP MTA Strict Transport Security) "
-                        "policy. MTA-STS ensures inbound mail is delivered over TLS-encrypted connections."
+                        "policy. MTA-STS instructs MTA-STS-aware senders (Gmail, Microsoft 365, "
+                        "and other large providers) to enforce TLS-encrypted delivery to your domain."
                     ),
                     impact=(
                         "Without MTA-STS, SMTP connections to your mail servers can be downgraded "
-                        "to unencrypted plaintext via man-in-the-middle attacks."
+                        "to unencrypted plaintext via man-in-the-middle attacks. Note that MTA-STS "
+                        "only protects against downgrade from senders that implement the standard."
                     ),
                     fix=(
-                        "1. Publish a TXT record:\n"
-                        f'   _mta-sts.{self.domain}.  IN  TXT  "v=STSv1; id=20240101"\n\n'
+                        "1. Publish a TXT record (increment the id value on every policy change):\n"
+                        f'   _mta-sts.{self.domain}.  IN  TXT  "v=STSv1; id=YYYYMMDD01"\n\n'
                         "2. Host a policy file at https://mta-sts." + self.domain + "/.well-known/mta-sts.txt:\n"
                         "   version: STSv1\n"
                         "   mode: testing\n"
-                        "   mx: *.your-mx-host.com\n"
+                        f"{mx_block}\n"
                         "   max_age: 86400\n\n"
-                        "3. After validation, change mode to 'enforce'."
+                        "3. After validating that TLS-RPT reports show no failures, change mode to 'enforce'."
                     ),
                     reference="https://datatracker.ietf.org/doc/html/rfc8461",
                 )
@@ -972,20 +1023,54 @@ class RemediationEngine:
             return recs
 
         if mx_count == 1:
-            recs.append(
-                Recommendation(
-                    priority=5,
-                    category="MX",
-                    title="Single MX record — no redundancy",
-                    description=(
-                        f"{self.domain} has only one MX record. If that server goes down, "
-                        "email delivery will fail."
-                    ),
-                    impact="No failover for inbound email if the primary MX is unavailable.",
-                    fix="Add a secondary MX record with a higher priority number.",
-                    reference="https://datatracker.ietf.org/doc/html/rfc5321#section-5",
+            # Check if the single MX points to a managed provider with built-in
+            # geo-redundancy. For these providers, adding a secondary MX is
+            # incorrect — it would bypass spam/malware filtering or create
+            # routing ambiguity that breaks delivery.
+            managed_providers = {
+                "Microsoft 365", "Microsoft 365 (GCC)", "Microsoft 365 (GCC High)",
+                "Google Workspace", "Mimecast", "Proofpoint", "Proofpoint Essentials",
+                "Barracuda", "Cisco Secure Email", "Sophos", "Trend Micro",
+            }
+            mx_providers = set(self.result.get("MX_PROVIDERS", []))
+            is_managed = bool(mx_providers & managed_providers)
+
+            if is_managed:
+                provider_name = ", ".join(mx_providers & managed_providers)
+                # Suppress the false-positive "add secondary MX" advice
+                recs.append(
+                    Recommendation(
+                        priority=5,
+                        category="MX",
+                        title=f"Single MX record — managed by {provider_name}",
+                        description=(
+                            f"{self.domain} has a single MX record pointing to {provider_name}. "
+                            "This is the correct configuration — the provider operates a "
+                            "geo-redundant infrastructure behind this single hostname. "
+                            "Do not add a secondary MX, as this could bypass spam/malware "
+                            "filtering or create routing conflicts."
+                        ),
+                        impact="No action needed. Redundancy is handled by the provider.",
+                        fix="No change required. This is the vendor-recommended configuration.",
+                        reference="https://datatracker.ietf.org/doc/html/rfc5321#section-5",
+                    )
                 )
-            )
+            else:
+                recs.append(
+                    Recommendation(
+                        priority=5,
+                        category="MX",
+                        title="Single MX record — no redundancy",
+                        description=(
+                            f"{self.domain} has only one MX record pointing to a self-hosted or "
+                            "unrecognized mail server. If that server goes down, email delivery "
+                            "will fail with no failover."
+                        ),
+                        impact="No failover for inbound email if the primary MX is unavailable.",
+                        fix="Add a secondary MX record with a higher priority number.",
+                        reference="https://datatracker.ietf.org/doc/html/rfc5321#section-5",
+                    )
+                )
 
         if all_starttls is False:
             no_tls = [mx.get("host", "?") for mx in mx_records if mx.get("starttls") in (False, None) and not mx.get("is_null_mx")]
@@ -1055,10 +1140,16 @@ class RemediationEngine:
                     "or undermining SPF/DKIM/DMARC validation."
                 ),
                 fix=(
-                    "Enable DNSSEC signing at your DNS provider. Most managed DNS "
-                    "services (Cloudflare, Route 53, Google Cloud DNS) offer "
-                    "one-click DNSSEC activation. After enabling, add the DS record "
-                    "to your domain registrar."
+                    "Enable DNSSEC signing at your DNS provider. Managed DNS services "
+                    "that support one-click DNSSEC activation include:\n"
+                    "  • Cloudflare (free tier)\n"
+                    "  • Azure DNS\n"
+                    "  • AWS Route 53\n"
+                    "  • Google Cloud DNS\n"
+                    "  • Simply.com / UnoEuro (DK)\n"
+                    "  • DK Hostmaster (via registrar)\n\n"
+                    "After enabling DNSSEC at the DNS host, add the DS record "
+                    "to your domain registrar to complete the chain of trust."
                 ),
                 reference="https://www.icann.org/resources/pages/dnssec-what-is-it-why-is-it-important-2019-03-05-en",
             ))
@@ -1363,9 +1454,12 @@ class RemediationEngine:
                     "(CAs) are allowed to issue SSL/TLS certificates for your domain."
                 ),
                 impact=(
-                    "Without a CAA record, any CA worldwide is permitted to issue a certificate "
-                    "for your domain if an attacker fraudulently passes domain validation. This "
-                    "can facilitate man-in-the-middle attacks."
+                    "CAA reduces your exposure to CA mis-issuance and gives you a published, "
+                    "auditable policy on which CAs may issue for your domain. Without it, "
+                    "any CA worldwide is permitted to issue a certificate if domain validation "
+                    "is passed — whether legitimately or fraudulently. While Certificate "
+                    "Transparency (CT) logs catch most mis-issuance within minutes, CAA "
+                    "provides defense-in-depth by preventing it at the source."
                 ),
                 fix=(
                     f'{self.domain}.  IN  CAA  0 issue "letsencrypt.org"\n\n'
@@ -1376,8 +1470,8 @@ class RemediationEngine:
                     f'{self.domain}.  IN  CAA  0 issuewild "letsencrypt.org"'
                 ),
                 reference="https://datatracker.ietf.org/doc/html/rfc8659",
-                eli5_explanation="CAA tells the internet exactly which companies are allowed to make 'ID cards' (certificates) for your website. Without it, anyone could trick a careless company into making a fake ID for your site.",
-                business_risk="Attackers could exploit a weaker Certificate Authority to generate a valid certificate for your domain, enabling perfect phishing sites or intercepting secure traffic."
+                eli5_explanation="CAA tells the internet exactly which companies are allowed to make 'ID cards' (certificates) for your website. Without it, a careless or compromised CA could issue a certificate for your domain.",
+                business_risk="Without CAA, mis-issuance only becomes visible through CT log monitoring after the fact. CAA proactively blocks unauthorized CAs from issuing in the first place."
             ))
             return recs
 

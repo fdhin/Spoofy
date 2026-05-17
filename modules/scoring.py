@@ -107,7 +107,7 @@ class SecurityScore:
         """
         score = 0
         spf = self.result.get("SPF")
-        spf_all = self.result.get("SPF_MULTIPLE_ALLS")
+        spf_all = self.result.get("SPF_ALL")
         too_many = self.result.get("SPF_TOO_MANY_DNS_QUERIES", False)
         permerror = self.result.get("SPF_PERMERROR", False)
 
@@ -391,7 +391,7 @@ class SecurityScore:
         """Return detail items for SPF scoring."""
         details = []
         spf = self.result.get("SPF")
-        spf_all = self.result.get("SPF_MULTIPLE_ALLS")
+        spf_all = self.result.get("SPF_ALL")
         too_many = self.result.get("SPF_TOO_MANY_DNS_QUERIES", False)
         permerror = self.result.get("SPF_PERMERROR", False)
 
@@ -588,7 +588,7 @@ class SecurityScore:
         if authority and str(authority).strip():
             details.append(("✅", f"VMC authority: {authority}"))
         else:
-            details.append(("ℹ️", "No VMC certificate (authority) specified"))
+            details.append(("⚠️", "No VMC certificate — required for Gmail logo display (Apple Mail works without VMC)"))
 
         return details
 
@@ -837,6 +837,13 @@ class SecurityScore:
             return 0
 
         score += 2  # TLSA records exist
+
+        # RFC 7672 §2.2: DANE requires DNSSEC to be meaningful — without it,
+        # TLSA records can be spoofed via DNS cache poisoning, making DANE
+        # cryptographically useless. Cap at 1 (acknowledge existence only).
+        if not dnssec_enabled:
+            return 1
+
         if is_secure:
             score += 2  # AD flag present on TLSA
         if dnssec_enabled:
