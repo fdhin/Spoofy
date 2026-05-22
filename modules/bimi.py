@@ -3,6 +3,7 @@
 import dns.resolver
 import logging
 
+from .dns_utils import encode_idna as _encode_idna, make_auth_resolver
 from .txt_utils import parse_txt_record, parse_tag_value
 
 logger = logging.getLogger("spoofyvibe.bimi")
@@ -26,16 +27,36 @@ class BIMI:
     def get_bimi_record(self):
         """Returns the BIMI record for the domain."""
         try:
-            resolver = dns.resolver.Resolver()
-            if self.dns_server:
-                resolver.nameservers = [self.dns_server]
-            bimi = resolver.resolve(f"default._bimi.{self.domain}", "TXT")
+            # RFC 5890: IDNA-encode domain before DNS query
+            idna_domain = _encode_idna(self.domain)
+            if not idna_domain:
+                return None
+
+            # BIMI is a same-zone query — use auth resolver per ARCHITECTURE.md §2
+            resolver = make_auth_resolver(self.dns_server)
+
+            logger.debug("Querying BIMI for %s", idna_domain)
+            bimi = resolver.resolve(f"default._bimi.{idna_domain}", "TXT")
             for rdata in bimi:
                 record = parse_txt_record(rdata)
                 if record.startswith("v=BIMI"):
                     return record
+            logger.debug("No BIMI record found in TXT records for %s", self.domain)
             return None
-        except Exception:
+        except dns.resolver.NXDOMAIN:
+            logger.debug("No BIMI record (NXDOMAIN) for %s", self.domain)
+            return None
+        except dns.resolver.NoAnswer:
+            logger.debug("No BIMI answer for %s", self.domain)
+            return None
+        except dns.resolver.Timeout:
+            logger.warning("BIMI query timeout for %s", self.domain)
+            return None
+        except dns.resolver.NoNameservers:
+            logger.warning("No nameservers available for BIMI query on %s", self.domain)
+            return None
+        except Exception as e:
+            logger.error("Unexpected error querying BIMI for %s: %s", self.domain, e)
             return None
 
     def get_bimi_details(self):
@@ -49,3 +70,4 @@ class BIMI:
             f"Location: {self.location}\n"
             f"Authority: {self.authority}"
         )
+

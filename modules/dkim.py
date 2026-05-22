@@ -9,6 +9,7 @@ import requests
 from datetime import datetime
 
 from .txt_utils import parse_txt_record
+from .dns_utils import encode_idna
 
 logger = logging.getLogger("spoofyvibe.dkim")
 
@@ -476,7 +477,7 @@ class DKIM:
         for selector in candidates:
             if selector in known_selectors:
                 continue
-            qname = f"{selector}._domainkey.{self.domain}"
+            qname = f"{selector}._domainkey.{encode_idna(self.domain)}"
 
             # Try direct TXT lookup first
             txt_value = self._resolve_dkim_txt(resolver, qname)

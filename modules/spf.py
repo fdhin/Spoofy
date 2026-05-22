@@ -1,6 +1,6 @@
 # modules/spf.py
 
-from .dns_utils import encode_idna as _encode_idna
+from .dns_utils import encode_idna as _encode_idna, make_auth_resolver, make_recursive_resolver
 
 """
 SPF (Sender Policy Framework) record discovery and analysis.
@@ -192,9 +192,7 @@ class SPF:
 
     def _make_resolver(self):
         """Create a resolver for the primary domain (auth NS preferred)."""
-        resolver = dns.resolver.Resolver()
-        resolver.nameservers = [ns for ns in [self.dns_server, "1.1.1.1", "8.8.8.8"] if ns]
-        return resolver
+        return make_auth_resolver(self.dns_server)
 
     def _make_recursive_resolver(self):
         """Create a recursive-only resolver for include/redirect recursion.
@@ -203,9 +201,7 @@ class SPF:
         the customer's auth NS would cause REFUSED/timeouts before falling
         back. Go straight to public recursive resolvers.
         """
-        resolver = dns.resolver.Resolver()
-        resolver.nameservers = ["1.1.1.1", "8.8.8.8"]
-        return resolver
+        return make_recursive_resolver()
 
     def get_spf_all_string(self):
         """Returns the string value of the 'all' mechanism in the SPF record.

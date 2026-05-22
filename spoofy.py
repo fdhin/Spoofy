@@ -179,6 +179,7 @@ async def process_domains(domains, output, enable_dkim=False,
         for domain in domains:
             result = await process_with_semaphore(domain)
             report.printer(**result)
+            results.append(result)
     else:
         # For file outputs, gather all results
         tasks = [process_with_semaphore(d) for d in domains]
@@ -194,7 +195,9 @@ async def process_domains(domains, output, enable_dkim=False,
                     "DOMAIN": domains[i],
                     "SCAN_ERROR": str(r),
                     "SECURITY_SCORE": 0,
-                    "SECURITY_GRADE": "F",
+                    "SECURITY_SCORE_MAX": 0,
+                    "SECURITY_SCORE_PCT": 0,
+                    "SECURITY_POSTURE": "Critical Risk",
                 })
                 failed_count += 1
             else:
@@ -330,7 +333,7 @@ def main():
     # Discover subdomains if requested
     if args.subdomains:
         from modules.subdomain import SubdomainFinder
-        all_domains = []
+        all_domains = list(domains)  # start with the original domains
         for domain in domains:
             finder = SubdomainFinder(domain)
             subs = finder.discover()

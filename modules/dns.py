@@ -16,6 +16,8 @@ MUST use a recursive resolver instead. See spoofy.py for the wiring.
 import dns.resolver
 import logging
 
+from .dns_utils import encode_idna
+
 logger = logging.getLogger("spoofyvibe.dns")
 
 # Default recursive resolver used when authoritative NS is unavailable
@@ -63,8 +65,9 @@ class DNS:
         resolver.lifetime = 10
 
         try:
+            idna_domain = encode_idna(self.domain)
             logger.debug("Querying SOA record for %s via %s", self.domain, DEFAULT_RECURSIVE)
-            query = resolver.resolve(self.domain, "SOA")
+            query = resolver.resolve(idna_domain, "SOA")
         except dns.resolver.NXDOMAIN:
             logger.warning("Domain %s does not exist (NXDOMAIN)", self.domain)
             self.errors.append(("SOA", "NXDOMAIN"))
@@ -91,6 +94,9 @@ class DNS:
 
         for data in query:
             mname = str(data.mname)
+            break  # SOA should be exactly one record; use the first
+        else:
+            return  # no records in the answer
 
         self.soa_mname = mname
         self.soa_record = self._resolve_nameserver_ip(mname)
@@ -128,7 +134,8 @@ class DNS:
         resolver.nameservers = [nameserver]
         resolver.lifetime = 5
         try:
-            resolver.resolve(self.domain, "SOA")
+            idna_domain = encode_idna(self.domain)
+            resolver.resolve(idna_domain, "SOA")
             return True
         except Exception as e:
             logger.debug(

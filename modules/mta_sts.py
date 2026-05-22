@@ -1,6 +1,6 @@
 # modules/mta_sts.py
 
-from .dns_utils import encode_idna as _encode_idna
+from .dns_utils import encode_idna as _encode_idna, make_auth_resolver
 
 """
 MTA-STS (SMTP MTA Strict Transport Security) and TLS-RPT detection.
@@ -114,10 +114,7 @@ class MTASTS:
 
     def _get_resolver(self):
         """Create a resolver preferring the provided DNS server."""
-        resolver = dns.resolver.Resolver()
-        if self.dns_server:
-            resolver.nameservers = [self.dns_server]
-        return resolver
+        return make_auth_resolver(self.dns_server)
 
     def _reset_policy(self):
         """Wipe policy fields if validation fails.

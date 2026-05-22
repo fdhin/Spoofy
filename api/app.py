@@ -9,6 +9,7 @@ Launch with: python3 spoofy.py --serve [--port 8080]
 import asyncio
 import logging
 import os
+import shutil
 from typing import Optional
 
 from fastapi import FastAPI, Query, BackgroundTasks
@@ -219,7 +220,7 @@ class PDFReportRequest(BaseModel):
 
 
 @app.post("/api/report/pdf")
-async def generate_pdf(req: PDFReportRequest):
+async def generate_pdf(req: PDFReportRequest, background_tasks: BackgroundTasks):
     """Generate a PDF executive report from scan results."""
     import tempfile
     loop = asyncio.get_event_loop()
@@ -228,6 +229,9 @@ async def generate_pdf(req: PDFReportRequest):
     pdf_path = os.path.join(tmp_dir, "spoofyvibe_report.pdf")
 
     await loop.run_in_executor(None, generate_pdf_report, req.results, pdf_path)
+
+    # Schedule cleanup after the response has been streamed to the client
+    background_tasks.add_task(shutil.rmtree, tmp_dir, True)
 
     return FileResponse(
         pdf_path,

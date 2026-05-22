@@ -203,8 +203,10 @@ def printer(**kwargs):
 
     # Security Score
     if score is not None and posture is not None:
-        posture_level = "good" if score >= 80 else "warning" if score >= 60 else "bad"
-        output_message("[*]", f"Security Score: {score}/100 (Posture: {posture})", posture_level)
+        max_score = kwargs.get("SECURITY_SCORE_MAX", 100) or 100
+        score_pct = (score / max_score) * 100 if max_score > 0 else 0
+        posture_level = "good" if score_pct >= 80 else "warning" if score_pct >= 60 else "bad"
+        output_message("[*]", f"Security Score: {score}/{max_score} (Posture: {posture})", posture_level)
 
     if spf_record:
         output_message("[*]", f"SPF record: {spf_record}", "info")

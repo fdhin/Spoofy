@@ -64,7 +64,7 @@ class TestSecurityScore(unittest.TestCase):
             SPF_TOO_MANY_DNS_QUERIES=False,
             DMARC="v=DMARC1; p=reject; rua=mailto:dmarc@test.com; pct=100; sp=reject",
             DMARC_POLICY="reject",
-            DMARC_PCT="100",
+            DMARC_PCT=100,
             DMARC_AGGREGATE_REPORT="mailto:dmarc@test.com",
             DMARC_SP="reject",
             DKIM="[*] selector1._domainkey.test.com -> v=DKIM1\r\n[*] selector2._domainkey.test.com -> v=DKIM1",

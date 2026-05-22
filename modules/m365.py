@@ -19,6 +19,8 @@ import re
 
 import dns.resolver
 
+from .dns_utils import encode_idna
+
 logger = logging.getLogger("spoofyvibe.m365")
 
 
@@ -117,9 +119,10 @@ class M365Tenant:
         """
         resolver = self._make_resolver()
         selectors = ["selector1", "selector2"]
+        idna_domain = encode_idna(self.domain)
 
         for selector in selectors:
-            fqdn = f"{selector}._domainkey.{self.domain}"
+            fqdn = f"{selector}._domainkey.{idna_domain}"
             try:
                 answers = resolver.resolve(fqdn, "CNAME")
                 for rdata in answers:

@@ -6,7 +6,7 @@ import logging
 import re
 
 from .txt_utils import parse_txt_record, parse_tag_value
-from .dns_utils import encode_idna
+from .dns_utils import encode_idna, make_auth_resolver
 
 logger = logging.getLogger("spoofyvibe.dmarc")
 
@@ -181,9 +181,8 @@ class DMARC:
 
     def get_dmarc_record_for_domain(self, domain):
         try:
-            resolver = dns.resolver.Resolver()
-            if self.dns_server:
-                resolver.nameservers = [self.dns_server]
+            # DMARC is a same-zone query — use auth resolver per ARCHITECTURE.md §2
+            resolver = make_auth_resolver(self.dns_server)
                 
             # IDNA encode domain per RFC 7489 §6.6.1
             idna_domain = encode_idna(domain)
@@ -232,9 +231,7 @@ class DMARC:
         rand_str = ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
         subdomain = f"spoofyvibe-wildcard-{rand_str}.{self.domain}"
 
-        resolver = dns.resolver.Resolver()
-        if self.dns_server:
-            resolver.nameservers = [self.dns_server]
+        resolver = make_auth_resolver(self.dns_server)
 
         try:
             subdomain_encoded = encode_idna(subdomain)

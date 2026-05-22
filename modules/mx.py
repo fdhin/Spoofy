@@ -15,6 +15,8 @@ import dns.reversename
 import socket
 import logging
 
+from .dns_utils import encode_idna, make_auth_resolver, make_recursive_resolver
+
 logger = logging.getLogger("spoofyvibe.mx")
 
 # Known mail provider patterns → display name
@@ -196,21 +198,15 @@ class MX:
 
     def _make_resolver(self, timeout=5):
         """Create a resolver for cross-zone lookups (MX host IPs, PTR)."""
-        resolver = dns.resolver.Resolver()
-        # MX host IPs and PTR records are cross-zone — use recursive resolvers
-        resolver.nameservers = ["1.1.1.1", "8.8.8.8"]
-        resolver.timeout = timeout
-        resolver.lifetime = timeout
-        return resolver
+        return make_recursive_resolver(timeout=timeout)
 
     def _query_mx(self):
         """Query MX records for the domain."""
         try:
-            resolver = dns.resolver.Resolver()
-            if self.dns_server:
-                resolver.nameservers = [self.dns_server]
+            resolver = make_auth_resolver(self.dns_server)
+            idna_domain = encode_idna(self.domain)
             logger.debug("Querying MX for %s", self.domain)
-            answers = resolver.resolve(self.domain, "MX")
+            answers = resolver.resolve(idna_domain, "MX")
             for rdata in answers:
                 mx = MXRecord(rdata.preference, str(rdata.exchange))
                 if mx.is_null_mx:

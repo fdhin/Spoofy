@@ -126,7 +126,7 @@ class ScanHistory:
         Save a scan result to the database.
 
         Args:
-            result: dict from process_domain() with SECURITY_SCORE, SECURITY_GRADE, etc.
+            result: dict from process_domain() with SECURITY_SCORE, SECURITY_POSTURE, etc.
 
         Returns:
             int: the row ID of the inserted scan

@@ -140,7 +140,11 @@ class SecurityScore:
             score += 1
 
         # DNS lookup count within limit (+2)
-        score += 2
+        # Only awarded when the record has a meaningful 'all' mechanism,
+        # because a record with no 'all' provides no actionable sender policy
+        # regardless of lookup count.
+        if spf_all and spf_all != "2many":
+            score += 2
 
         return min(score, 16)
 
@@ -173,7 +177,7 @@ class SecurityScore:
             score += 1
 
         # Percentage = 100 or not set (defaults to 100) (+2)
-        if pct is None or str(pct).strip() == "100":
+        if pct is None or pct == 100:
             score += 2
 
         # Aggregate reporting configured (+4)
@@ -462,7 +466,7 @@ class SecurityScore:
         else:
             details.append(("❌", "No policy (p=) tag found"))
 
-        if pct is None or str(pct).strip() == "100":
+        if pct is None or pct == 100:
             details.append(("✅", "Policy applies to 100% of messages"))
         else:
             details.append(("⚠️", f"Policy only applies to {pct}% of messages"))
@@ -577,7 +581,7 @@ class SecurityScore:
 
         # BIMI requires pct=100 (RFC 8965 §3.1.1)
         # Receivers like Gmail and Apple will not display the logo if pct < 100
-        if dmarc_pct is not None and str(dmarc_pct).strip() != "100":
+        if dmarc_pct is not None and dmarc_pct != 100:
             details.append(("⚠️", f"BIMI requires DMARC pct=100 for logo display — current pct={dmarc_pct}"))
 
         if location and str(location).strip():
@@ -846,8 +850,10 @@ class SecurityScore:
 
         if is_secure:
             score += 2  # AD flag present on TLSA
-        if dnssec_enabled:
-            score += 1  # Origin domain DNSSEC (RFC 7672 compliance)
+
+        # Origin domain DNSSEC (RFC 7672 compliance) — always True here
+        # because we return early above when dnssec_enabled is False.
+        score += 1
 
         return min(score, 5)
 
